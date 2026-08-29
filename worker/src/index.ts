@@ -163,22 +163,45 @@ app.get('/api/v1/nodes/:id', async (c) => {
   return c.json(nodes[0]);
 });
 
-// Manual Sync Endpoint
+// Cloud Sync Endpoint (Incremental or Full Backfill)
 app.post('/api/v1/sync', async (c) => {
+  const mode = c.req.query('mode') || 'incremental';
+  const lookback = parseInt(c.req.query('lookback_days') || '1', 10);
   const syncService = new EdgeSyncService(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
-  const res = await syncService.syncRecentNodes(1);
-  return c.json(res);
+
+  if (mode === 'full') {
+    const res = await syncService.backfillWorkspaceCloud(250);
+    return c.json(res);
+  } else {
+    const res = await syncService.syncRecentNodes(lookback);
+    return c.json(res);
+  }
 });
 
-// Export default worker with Scheduled Cron handler
+// Cloud Sync & Mirror Status
+app.get('/api/v1/sync/status', async (c) => {
+  const syncService = new EdgeSyncService(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
+  const stats = await syncService.getSyncStats();
+  return c.json(stats);
+});
+
+// Export default worker with Autonomous Scheduled Cron handler
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil((async () => {
-      console.log('Running automated 15-minute Tana incremental sync...');
       const syncService = new EdgeSyncService(env.DB, env.VECTORIZE, env.AI, env.TANA_API_TOKEN);
-      const res = await syncService.syncRecentNodes(1);
-      console.log('Automated sync result:', res);
+      const stats = await syncService.getSyncStats();
+
+      if (!stats.backfill_complete) {
+        console.log(`[Cloud Cron] Advancing full workspace cloud backfill (cursor: ${stats.backfill_cursor})...`);
+        const res = await syncService.backfillWorkspaceCloud(250);
+        console.log('[Cloud Cron] Backfill chunk result:', res);
+      } else {
+        console.log('[Cloud Cron] Running automated 15-minute Tana incremental diff sync...');
+        const res = await syncService.syncRecentNodes(1);
+        console.log('[Cloud Cron] Incremental sync result:', res);
+      }
     })());
   }
 };
