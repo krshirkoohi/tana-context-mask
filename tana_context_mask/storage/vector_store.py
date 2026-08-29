@@ -85,9 +85,9 @@ class VectorStore:
                 "last_updated": datetime.now().isoformat()
             }
             data_rows.append(row)
-            self._in_memory_vectors[row["id"]] = row
 
         # Write to LanceDB
+        lancedb_success = False
         try:
             tbl = self._get_table()
             if tbl is None:
@@ -103,8 +103,17 @@ class VectorStore:
                     except Exception:
                         pass
                 self._table.add(data_rows)
+            lancedb_success = True
+            
+            # Clear in-memory fallback to free RAM since LanceDB is handling it
+            self._in_memory_vectors.clear()
         except Exception:
             pass
+
+        # Fallback to RAM ONLY if LanceDB failed
+        if not lancedb_success:
+            for row in data_rows:
+                self._in_memory_vectors[row["id"]] = row
 
     def search(self, query_text_or_vector, limit: int = 25) -> List[Dict[str, Any]]:
         """

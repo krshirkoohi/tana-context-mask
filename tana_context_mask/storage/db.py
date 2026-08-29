@@ -150,76 +150,94 @@ class SQLiteStore:
     def upsert_node(self, node: TanaNode):
         self.bulk_upsert_nodes([node])
 
+
     def bulk_upsert_nodes(self, nodes: List[TanaNode]):
         if not nodes:
             return
 
+        nodes_data = []
+        fts_del_data = []
+        fts_ins_data = []
+        
+        tags_del_data = []
+        tags_ins_data = []
+        
+        fields_del_data = []
+        fields_ins_data = []
+        
+        edges_del_data = []
+        edges_ins_data = []
+
+        for node in nodes:
+            c_hash = node.content_hash or self.calculate_content_hash(node.name, node.description or "", node.fields)
+            s_hash = node.structure_hash or self.calculate_structure_hash(node.parent_id, node.children, [t.tag_name for t in node.supertags])
+            
+            nodes_data.append((
+                node.id, node.name, node.description or "", node.doc_type, node.parent_id,
+                node.created_at or datetime.now().isoformat(),
+                node.updated_at or datetime.now().isoformat(),
+                c_hash, s_hash,
+                1 if node.is_done else 0,
+                1 if node.in_trash else 0,
+                None
+            ))
+
+            fts_del_data.append((node.id,))
+            if not node.in_trash and node.name:
+                fts_ins_data.append((node.id, node.name, node.description or ""))
+
+            tags_del_data.append((node.id,))
+            for tag in node.supertags:
+                tags_ins_data.append((node.id, tag.tag_id, tag.tag_name))
+
+            fields_del_data.append((node.id,))
+            for field in node.fields:
+                fields_ins_data.append((node.id, field.field_id, field.field_name, field.value_text or "", field.value_node_id or ""))
+
+            edges_del_data.append((node.id,))
+            if node.parent_id:
+                edges_ins_data.append((node.parent_id, node.id, 'parent_child', ''))
+            for child_id in node.children:
+                edges_ins_data.append((node.id, child_id, 'parent_child', ''))
+            for ref_id in node.references:
+                edges_ins_data.append((node.id, ref_id, 'reference', ''))
+            for tag in node.supertags:
+                edges_ins_data.append((node.id, tag.tag_id, 'tag', ''))
+
         with self.get_connection() as conn:
-            for node in nodes:
-                c_hash = node.content_hash or self.calculate_content_hash(node.name, node.description or "", node.fields)
-                s_hash = node.structure_hash or self.calculate_structure_hash(node.parent_id, node.children, [t.tag_name for t in node.supertags])
-                
-                # Upsert into nodes
-                conn.execute("""
-                    INSERT INTO nodes (
-                        id, name, description, doc_type, parent_id,
-                        created_at, updated_at, content_hash, structure_hash,
-                        is_done, in_trash, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        name = excluded.name,
-                        description = excluded.description,
-                        doc_type = excluded.doc_type,
-                        parent_id = excluded.parent_id,
-                        updated_at = excluded.updated_at,
-                        content_hash = excluded.content_hash,
-                        structure_hash = excluded.structure_hash,
-                        is_done = excluded.is_done,
-                        in_trash = excluded.in_trash
-                """, (
-                    node.id, node.name, node.description or "", node.doc_type, node.parent_id,
-                    node.created_at or datetime.now().isoformat(),
-                    node.updated_at or datetime.now().isoformat(),
-                    c_hash, s_hash,
-                    1 if node.is_done else 0,
-                    1 if node.in_trash else 0,
-                    None
-                ))
+            conn.executemany("""
+                INSERT INTO nodes (
+                    id, name, description, doc_type, parent_id,
+                    created_at, updated_at, content_hash, structure_hash,
+                    is_done, in_trash, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    doc_type = excluded.doc_type,
+                    parent_id = excluded.parent_id,
+                    updated_at = excluded.updated_at,
+                    content_hash = excluded.content_hash,
+                    structure_hash = excluded.structure_hash,
+                    is_done = excluded.is_done,
+                    in_trash = excluded.in_trash
+            """, nodes_data)
 
-                # Update FTS
-                conn.execute("DELETE FROM node_fts WHERE id = ?", (node.id,))
-                if not node.in_trash and node.name:
-                    conn.execute("INSERT INTO node_fts (id, name, description) VALUES (?, ?, ?)",
-                                 (node.id, node.name, node.description or ""))
+            conn.executemany("DELETE FROM node_fts WHERE id = ?", fts_del_data)
+            if fts_ins_data:
+                conn.executemany("INSERT INTO node_fts (id, name, description) VALUES (?, ?, ?)", fts_ins_data)
 
-                # Update Tags
-                conn.execute("DELETE FROM tags WHERE node_id = ?", (node.id,))
-                for tag in node.supertags:
-                    conn.execute("INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)",
-                                 (node.id, tag.tag_id, tag.tag_name))
+            conn.executemany("DELETE FROM tags WHERE node_id = ?", tags_del_data)
+            if tags_ins_data:
+                conn.executemany("INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)", tags_ins_data)
 
-                # Update Fields
-                conn.execute("DELETE FROM fields WHERE node_id = ?", (node.id,))
-                for field in node.fields:
-                    conn.execute("INSERT OR REPLACE INTO fields (node_id, field_id, field_name, value_text, value_node_id) VALUES (?, ?, ?, ?, ?)",
-                                 (node.id, field.field_id, field.field_name, field.value_text or "", field.value_node_id or ""))
+            conn.executemany("DELETE FROM fields WHERE node_id = ?", fields_del_data)
+            if fields_ins_data:
+                conn.executemany("INSERT OR REPLACE INTO fields (node_id, field_id, field_name, value_text, value_node_id) VALUES (?, ?, ?, ?, ?)", fields_ins_data)
 
-                # Update Edges
-                conn.execute("DELETE FROM edges WHERE source_id = ?", (node.id,))
-                if node.parent_id:
-                    conn.execute("INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, attribute_id) VALUES (?, ?, 'parent_child', '')",
-                                 (node.parent_id, node.id))
-                for child_id in node.children:
-                    conn.execute("INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, attribute_id) VALUES (?, ?, 'parent_child', '')",
-                                 (node.id, child_id))
-                for ref_id in node.references:
-                    conn.execute("INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, attribute_id) VALUES (?, ?, 'reference', '')",
-                                 (node.id, ref_id))
-                for tag in node.supertags:
-                    conn.execute("INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, attribute_id) VALUES (?, ?, 'tag', '')",
-                                 (node.id, tag.tag_id))
-            conn.commit()
-
+            conn.executemany("DELETE FROM edges WHERE source_id = ?", edges_del_data)
+            if edges_ins_data:
+                conn.executemany("INSERT OR IGNORE INTO edges (source_id, target_id, relation_type, attribute_id) VALUES (?, ?, ?, ?)", edges_ins_data)
     def get_node(self, node_id: str) -> Optional[TanaNode]:
         with self.get_connection() as conn:
             row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
@@ -227,51 +245,90 @@ class SQLiteStore:
                 return None
             return self._row_to_node(conn, row)
 
+    def get_nodes(self, node_ids: List[str]) -> List[TanaNode]:
+        if not node_ids:
+            return []
+        with self.get_connection() as conn:
+            placeholders = ",".join(["?"] * len(node_ids))
+            rows = conn.execute(f"SELECT * FROM nodes WHERE id IN ({placeholders})", node_ids).fetchall()
+            return self._rows_to_nodes(conn, rows)
+
+
+    def _rows_to_nodes(self, conn: sqlite3.Connection, rows: List[sqlite3.Row]) -> List[TanaNode]:
+        if not rows:
+            return []
+            
+        # Group in batches of 900 to respect SQLite limits
+        all_nodes = []
+        for i in range(0, len(rows), 900):
+            batch_rows = rows[i:i+900]
+            node_ids = [r["id"] for r in batch_rows]
+            placeholders = ",".join(["?"] * len(node_ids))
+            
+            # Batch fetch tags
+            tag_rows = conn.execute(f"SELECT node_id, tag_id, tag_name FROM tags WHERE node_id IN ({placeholders})", node_ids).fetchall()
+            tags_by_node = {nid: [] for nid in node_ids}
+            for r in tag_rows:
+                tags_by_node[r["node_id"]].append(NodeTag(tag_id=r["tag_id"], tag_name=r["tag_name"]))
+
+            # Batch fetch fields
+            field_rows = conn.execute(f"SELECT node_id, field_id, field_name, value_text, value_node_id FROM fields WHERE node_id IN ({placeholders})", node_ids).fetchall()
+            fields_by_node = {nid: [] for nid in node_ids}
+            for r in field_rows:
+                fields_by_node[r["node_id"]].append(NodeField(field_id=r["field_id"], field_name=r["field_name"], value_text=r["value_text"], value_node_id=r["value_node_id"]))
+
+            # Batch fetch edges
+            # We fetch both outgoing and incoming references + children
+            # Since relation_type can be parent_child or reference
+            edge_params = [*node_ids, *node_ids]
+            edge_rows = conn.execute(f"SELECT source_id, target_id, relation_type FROM edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})", edge_params).fetchall()
+            
+            children_by_node = {nid: [] for nid in node_ids}
+            refs_by_node = {nid: [] for nid in node_ids}
+            backlinks_by_node = {nid: [] for nid in node_ids}
+            
+            node_id_set = set(node_ids)
+            for r in edge_rows:
+                src, tgt, rel = r["source_id"], r["target_id"], r["relation_type"]
+                if rel == 'parent_child' and src in node_id_set:
+                    children_by_node[src].append(tgt)
+                if rel == 'reference' and src in node_id_set:
+                    refs_by_node[src].append(tgt)
+                if rel == 'reference' and tgt in node_id_set:
+                    backlinks_by_node[tgt].append(src)
+
+            # Memoize breadcrumbs per parent_id in this batch
+            breadcrumbs_memo = {}
+            for row in batch_rows:
+                pid = row["parent_id"]
+                if pid not in breadcrumbs_memo:
+                    breadcrumbs_memo[pid] = self._get_breadcrumb_names(conn, pid)
+
+            for row in batch_rows:
+                nid = row["id"]
+                all_nodes.append(TanaNode(
+                    id=nid,
+                    name=row["name"],
+                    description=row["description"],
+                    doc_type=row["doc_type"],
+                    parent_id=row["parent_id"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    content_hash=row["content_hash"],
+                    structure_hash=row["structure_hash"],
+                    is_done=bool(row["is_done"]),
+                    in_trash=bool(row["in_trash"]),
+                    supertags=tags_by_node.get(nid, []),
+                    fields=fields_by_node.get(nid, []),
+                    children=list(dict.fromkeys(children_by_node.get(nid, []))),
+                    references=list(dict.fromkeys(refs_by_node.get(nid, []))),
+                    backlinks=list(dict.fromkeys(backlinks_by_node.get(nid, []))),
+                    breadcrumbs=breadcrumbs_memo[row["parent_id"]]
+                ))
+        return all_nodes
+
     def _row_to_node(self, conn: sqlite3.Connection, row: sqlite3.Row) -> TanaNode:
-        node_id = row["id"]
-        
-        # Supertags
-        tag_rows = conn.execute("SELECT DISTINCT tag_id, tag_name FROM tags WHERE node_id = ?", (node_id,)).fetchall()
-        supertags = [NodeTag(tag_id=r["tag_id"], tag_name=r["tag_name"]) for r in tag_rows]
-
-        # Fields
-        field_rows = conn.execute("SELECT DISTINCT field_id, field_name, value_text, value_node_id FROM fields WHERE node_id = ?", (node_id,)).fetchall()
-        fields = [NodeField(field_id=r["field_id"], field_name=r["field_name"], value_text=r["value_text"], value_node_id=r["value_node_id"]) for r in field_rows]
-
-        # Children
-        child_rows = conn.execute("SELECT DISTINCT target_id FROM edges WHERE source_id = ? AND relation_type = 'parent_child'", (node_id,)).fetchall()
-        children = [r["target_id"] for r in child_rows]
-
-        # References
-        ref_rows = conn.execute("SELECT DISTINCT target_id FROM edges WHERE source_id = ? AND relation_type = 'reference'", (node_id,)).fetchall()
-        references = [r["target_id"] for r in ref_rows]
-
-        # Backlinks (nodes that reference this node)
-        backlink_rows = conn.execute("SELECT DISTINCT source_id FROM edges WHERE target_id = ? AND relation_type = 'reference'", (node_id,)).fetchall()
-        backlinks = [r["source_id"] for r in backlink_rows]
-
-        # Breadcrumbs (computed dynamically or up to 5 steps)
-        breadcrumbs = self._get_breadcrumb_names(conn, row["parent_id"])
-
-        return TanaNode(
-            id=node_id,
-            name=row["name"],
-            description=row["description"],
-            doc_type=row["doc_type"],
-            parent_id=row["parent_id"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            content_hash=row["content_hash"],
-            structure_hash=row["structure_hash"],
-            is_done=bool(row["is_done"]),
-            in_trash=bool(row["in_trash"]),
-            supertags=supertags,
-            fields=fields,
-            children=children,
-            references=references,
-            backlinks=backlinks,
-            breadcrumbs=breadcrumbs
-        )
+        return self._rows_to_nodes(conn, [row])[0]
 
     def _get_breadcrumb_names(self, conn: sqlite3.Connection, start_parent_id: Optional[str], max_depth: int = 8) -> List[str]:
         crumbs = []
@@ -296,7 +353,7 @@ class SQLiteStore:
                 WHERE e.source_id = ? AND e.relation_type = 'parent_child' AND n.in_trash = 0
                 LIMIT ?
             """, (node_id, limit)).fetchall()
-            return [self._row_to_node(conn, r) for r in rows]
+            return self._rows_to_nodes(conn, rows)
 
     def get_parents_chain(self, node_id: str, max_depth: int = 10) -> List[TanaNode]:
         parents = []
@@ -320,7 +377,7 @@ class SQLiteStore:
                 JOIN edges e ON n.id = e.target_id
                 WHERE e.source_id = ? AND e.relation_type = 'reference' AND n.in_trash = 0
             """, (node_id,)).fetchall()
-            return [self._row_to_node(conn, r) for r in rows]
+            return self._rows_to_nodes(conn, rows)
 
     def get_backlinks(self, node_id: str) -> List[TanaNode]:
         with self.get_connection() as conn:
@@ -329,7 +386,7 @@ class SQLiteStore:
                 JOIN edges e ON n.id = e.source_id
                 WHERE e.target_id = ? AND e.relation_type = 'reference' AND n.in_trash = 0
             """, (node_id,)).fetchall()
-            return [self._row_to_node(conn, r) for r in rows]
+            return self._rows_to_nodes(conn, rows)
 
     def fts_search(self, query: str, limit: int = 25, tag_filter: Optional[str] = None) -> List[Tuple[TanaNode, float]]:
         # Sanitise query for FTS5
@@ -362,8 +419,8 @@ class SQLiteStore:
                 """
                 rows = conn.execute(sql, (fts_query, limit)).fetchall()
 
-            for r in rows:
-                node = self._row_to_node(conn, r)
+            nodes = self._rows_to_nodes(conn, rows)
+            for r, node in zip(rows, nodes):
                 # BM25 scores in sqlite are negative (more negative = stronger match, e.g. -12.5)
                 # Invert to positive so higher = better, then normalize via x / (1 + x)
                 raw_bm25 = max(0.0, -float(r["rank_score"]))
@@ -377,7 +434,7 @@ class SQLiteStore:
                 rows = conn.execute("SELECT * FROM nodes WHERE in_trash = 0 LIMIT ?", (limit,)).fetchall()
             else:
                 rows = conn.execute("SELECT * FROM nodes WHERE in_trash = 0").fetchall()
-            return [self._row_to_node(conn, r) for r in rows]
+            return self._rows_to_nodes(conn, rows)
 
     def count_nodes(self) -> int:
         with self.get_connection() as conn:

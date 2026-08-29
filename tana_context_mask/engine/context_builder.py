@@ -46,8 +46,13 @@ class ContextBuilder:
         
         seed_nodes: List[TanaNode] = []
         seed_scores: Dict[str, float] = {}
+        
+        result_ids = [item.id for item in search_resp.results]
+        nodes = self.db.get_nodes(result_ids)
+        node_map = {n.id: n for n in nodes}
+        
         for item in search_resp.results:
-            node = self.db.get_node(item.id)
+            node = node_map.get(item.id)
             if node:
                 seed_nodes.append(node)
                 seed_scores[node.id] = item.score

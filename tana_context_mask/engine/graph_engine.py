@@ -30,13 +30,17 @@ class GraphEngine:
 
         # 2. Expand 1-hop neighbours for seeds
         if max_hops >= 1:
+            # Pre-fetch all parents for seed nodes in batch
+            parent_ids = list(set([s.parent_id for s in seed_nodes if s.parent_id and s.parent_id not in seen_ids]))
+            parent_nodes_map = {n.id: n for n in self.db.get_nodes(parent_ids)} if parent_ids else {}
+
             for seed in seed_nodes:
                 if len(expanded_list) >= max_expansion_nodes + len(seed_nodes):
                     break
 
                 # A. Parent context (crucial for short or ambiguous nodes)
                 if seed.parent_id and seed.parent_id not in seen_ids:
-                    parent_node = self.db.get_node(seed.parent_id)
+                    parent_node = parent_nodes_map.get(seed.parent_id)
                     if parent_node and not parent_node.in_trash and parent_node.name:
                         seen_ids.add(parent_node.id)
                         clean_name = re.sub(r'<[^>]+>', '', parent_node.name).strip()
