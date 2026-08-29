@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+dist/
+d1_seed.sql
+vectors_seed.jsonl
