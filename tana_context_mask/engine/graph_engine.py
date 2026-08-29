@@ -72,6 +72,17 @@ class GraphEngine:
                         if len(expanded_list) >= max_expansion_nodes + len(seed_nodes):
                             break
 
+                # D. Temporal Co-occurrence (Implicit Sibling Edge on Day/Week Pages)
+                if seed.parent_id:
+                    siblings = self.db.get_children(seed.parent_id, limit=3)
+                    for sib in siblings:
+                        if sib.id not in seen_ids and sib.id != seed.id and sib.name and not sib.in_trash:
+                            seen_ids.add(sib.id)
+                            reason = f"Candidate contributing evidence (temporal co-occurrence with '{seed.name[:25]}')"
+                            expanded_list.append((sib, reason))
+                            if len(expanded_list) >= max_expansion_nodes + len(seed_nodes):
+                                break
+
         return expanded_list
 
     def get_full_node_context(self, node_id: str) -> Optional[Dict[str, Any]]:

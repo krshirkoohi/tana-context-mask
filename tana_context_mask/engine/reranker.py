@@ -72,14 +72,15 @@ class TaskReranker:
         # Sort descending by composite score
         scored_candidates.sort(key=lambda x: x[1], reverse=True)
 
-        # Deduplication: prune redundant leaf nodes if parent is already top-ranked with same content
-        seen_names = set()
+        # Deduplication: prune only exact duplicate leaves sharing the same parent container
+        # Preserves minority evidence, divergent decisions, and contradictions across different areas (Grill-Me #11)
+        seen_keys = set()
         deduped: List[Tuple[TanaNode, float, str]] = []
         for node, s, r in scored_candidates:
-            norm_name = node.name.strip().lower()
-            if norm_name in seen_names and len(norm_name) > 10:
+            norm_key = (node.parent_id or "", node.name.strip().lower())
+            if norm_key in seen_keys and len(node.name.strip()) > 10:
                 continue
-            seen_names.add(norm_name)
+            seen_keys.add(norm_key)
             deduped.append((node, s, r))
             if len(deduped) >= max_nodes:
                 break
