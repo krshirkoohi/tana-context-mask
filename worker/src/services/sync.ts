@@ -146,7 +146,8 @@ export class EdgeSyncService {
   }
 
   /**
-   * Incremental sync triggered via Cloudflare Cron trigger or manual API call.
+   * Incremental sync using the official Tana Remote MCP JSON-RPC 2.0 endpoint.
+   * Only fetches nodes edited in the last lookback window (default 1 day) to stay well within rate limits.
    */
   async syncRecentNodes(lookbackDays: number = 1): Promise<{ updatedCount: number; status: string }> {
     if (!this.tanaToken) {
@@ -155,23 +156,52 @@ export class EdgeSyncService {
     }
 
     try {
-      const response = await fetch('https://europe-west1-tagr-prod.cloudfunctions.net/search', {
+      const payload = {
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: {
+          name: 'search_nodes',
+          arguments: {
+            query: { edited: { last: lookbackDays } },
+            limit: 100
+          }
+        },
+        id: 1
+      };
+
+      const response = await fetch('https://app.tana.inc/mcp', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.tanaToken}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream'
         },
-        body: JSON.stringify({
-          edited: { last: lookbackDays }
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
-        throw new Error(`Tana API responded with status ${response.status}`);
+        throw new Error(`Tana MCP responded with status ${response.status}`);
       }
 
-      const data: any = await response.json();
-      const rawNodes = data.results || data.nodes || [];
+      const jsonRpcRes: any = await response.json();
+      let rawNodes: any[] = [];
+
+      // Extract result from MCP tool response
+      if (jsonRpcRes.result && Array.isArray(jsonRpcRes.result.content)) {
+        for (const item of jsonRpcRes.result.content) {
+          if (item.type === 'text' && item.text) {
+            try {
+              const parsed = JSON.parse(item.text);
+              if (Array.isArray(parsed)) rawNodes = parsed;
+              else if (parsed && Array.isArray(parsed.nodes)) rawNodes = parsed.nodes;
+            } catch {
+              // Not JSON
+            }
+          }
+        }
+      } else if (Array.isArray(jsonRpcRes.result)) {
+        rawNodes = jsonRpcRes.result;
+      }
 
       if (rawNodes.length === 0) {
         return { updatedCount: 0, status: 'no_changes' };
@@ -186,7 +216,7 @@ export class EdgeSyncService {
 
       return { updatedCount: rawNodes.length, status: 'success' };
     } catch (err: any) {
-      console.error('Incremental sync error:', err);
+      console.error('Tana MCP sync error:', err);
       return { updatedCount: 0, status: `error: ${err.message}` };
     }
   }
