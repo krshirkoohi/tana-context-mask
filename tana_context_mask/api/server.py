@@ -133,11 +133,10 @@ def trigger_sync(
 ):
     try:
         if mode == "bootstrap":
-            if not export_file:
-                # Use default export if present
-                default_export = "/Users/krshirkoohi/Documents/Notes Repo/2026/--D3QJHnLgSk@2026-03-07.json"
-                export_file = default_export
-            res = mirror_engine.bootstrap_from_export(export_file, max_nodes=max_nodes)
+            target_export = export_file or getattr(settings, 'tana_export_file', None)
+            if not target_export:
+                raise HTTPException(status_code=400, detail="export_file must be specified for bootstrap mode")
+            res = mirror_engine.bootstrap_from_export(target_export, max_nodes=max_nodes)
             return res
         else:
             res = mirror_engine.sync_incremental(lookback_days=lookback_days)

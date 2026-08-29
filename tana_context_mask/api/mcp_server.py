@@ -155,8 +155,10 @@ class MCPServer:
         elif name == "sync_mirror":
             mode = args.get("mode", "incremental")
             if mode == "bootstrap":
-                default_export = "/Users/krshirkoohi/Documents/Notes Repo/2026/--D3QJHnLgSk@2026-03-07.json"
-                return self.mirror_engine.bootstrap_from_export(default_export)
+                target_export = args.get("export_file") or getattr(settings, 'tana_export_file', None)
+                if not target_export:
+                    return {"error": "export_file must be specified in arguments for bootstrap mode"}
+                return self.mirror_engine.bootstrap_from_export(target_export)
             else:
                 lookback = args.get("lookback_days", 1)
                 return self.mirror_engine.sync_incremental(lookback_days=lookback)

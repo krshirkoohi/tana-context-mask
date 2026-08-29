@@ -82,7 +82,10 @@ def main():
 
     elif args.command == "sync":
         if args.mode == "bootstrap":
-            export_file = args.file or "/Users/krshirkoohi/Documents/Notes Repo/2026/--D3QJHnLgSk@2026-03-07.json"
+            export_file = args.file or getattr(settings, 'tana_export_file', None)
+            if not export_file:
+                print("Error: --file argument is required for bootstrap mode.")
+                return
             print(f"Starting Export Bootstrap from: {export_file}")
             res = mirror_engine.bootstrap_from_export(export_file, max_nodes=args.max_nodes)
             print("Bootstrap Complete:", json.dumps(res, indent=2))
