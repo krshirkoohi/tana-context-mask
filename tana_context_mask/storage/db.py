@@ -364,9 +364,10 @@ class SQLiteStore:
 
             for r in rows:
                 node = self._row_to_node(conn, r)
-                # BM25 scores in sqlite are negative (lower is better, e.g. -5.2), convert to positive normalised
-                raw_bm25 = abs(float(r["rank_score"]))
-                norm_score = 1.0 / (1.0 + raw_bm25)
+                # BM25 scores in sqlite are negative (more negative = stronger match, e.g. -12.5)
+                # Invert to positive so higher = better, then normalize via x / (1 + x)
+                raw_bm25 = max(0.0, -float(r["rank_score"]))
+                norm_score = raw_bm25 / (1.0 + raw_bm25)
                 results.append((node, norm_score))
         return results
 

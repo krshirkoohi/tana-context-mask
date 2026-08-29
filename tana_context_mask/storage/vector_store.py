@@ -119,13 +119,12 @@ class VectorStore:
         try:
             tbl = self._get_table()
             if tbl is not None:
-                results_df = tbl.search(query_vector).limit(limit).to_pandas()
+                results_df = tbl.search(query_vector).metric("cosine").limit(limit).to_pandas()
                 results = []
                 for _, row in results_df.iterrows():
-                    # LanceDB returns _distance (L2 distance or cosine distance). Convert to similarity score in [0, 1]
+                    # LanceDB cosine distance in [0, 2]. Cosine similarity = 1.0 - distance
                     dist = float(row.get("_distance", 1.0))
-                    # Cosine similarity roughly 1 - (dist^2)/2 or 1 - dist
-                    sim = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
+                    sim = max(0.0, min(1.0, 1.0 - dist))
                     results.append({
                         "id": row["id"],
                         "name": row["name"],
