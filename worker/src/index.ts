@@ -8,9 +8,115 @@ import { EdgeSyncService } from './services/sync';
 
 import { openApiSpec } from './openapi';
 
+import { RemoteMCPHandler } from './services/mcp';
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.use('*', cors());
+
+import { streamSSE } from 'hono/streaming';
+
+// Model Context Protocol (MCP) SSE Transport Endpoint
+app.get('/sse', async (c) => {
+  const sessionId = crypto.randomUUID();
+  return streamSSE(c, async (stream) => {
+    await stream.writeSSE({
+      event: 'endpoint',
+      data: `/messages?sessionId=${sessionId}`
+    });
+    while (true) {
+      await stream.sleep(15000);
+      await stream.writeSSE({ event: 'ping', data: 'heartbeat' });
+    }
+  });
+});
+
+app.get('/mcp', async (c) => {
+  const sessionId = crypto.randomUUID();
+  return streamSSE(c, async (stream) => {
+    await stream.writeSSE({
+      event: 'endpoint',
+      data: `/messages?sessionId=${sessionId}`
+    });
+    while (true) {
+      await stream.sleep(15000);
+      await stream.writeSSE({ event: 'ping', data: 'heartbeat' });
+    }
+  });
+});
+
+// MCP JSON-RPC Message Handling
+app.post('/messages', async (c) => {
+  const body = await c.req.json();
+  const mcpHandler = new RemoteMCPHandler(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
+  const response = await mcpHandler.handleMessage(body);
+  if (!response) {
+    return new Response(null, { status: 202 });
+  }
+  return c.json(response);
+});
+
+app.post('/mcp', async (c) => {
+  const body = await c.req.json();
+  const mcpHandler = new RemoteMCPHandler(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
+  const response = await mcpHandler.handleMessage(body);
+  return c.json(response);
+});
+
+// Alias /mc to /mcp for convenience
+app.post('/mc', async (c) => {
+  const body = await c.req.json();
+  const mcpHandler = new RemoteMCPHandler(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
+  const response = await mcpHandler.handleMessage(body);
+  return c.json(response);
+});
+
+// OAuth 2.0 Discovery Endpoints (RFC 8414 & OpenID Connect)
+const oauthMetadata = {
+  issuer: 'https://tana-context-mask.krshirkoohi.workers.dev',
+  authorization_endpoint: 'https://tana-context-mask.krshirkoohi.workers.dev/oauth/authorize',
+  token_endpoint: 'https://tana-context-mask.krshirkoohi.workers.dev/oauth/token',
+  userinfo_endpoint: 'https://tana-context-mask.krshirkoohi.workers.dev/oauth/userinfo',
+  response_types_supported: ['code', 'token'],
+  grant_types_supported: ['authorization_code', 'client_credentials'],
+  token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+  scopes_supported: ['read', 'write', 'mcp']
+};
+
+app.get('/.well-known/oauth-authorization-server', (c) => c.json(oauthMetadata));
+app.get('/.well-known/openid-configuration', (c) => c.json(oauthMetadata));
+app.get('/.well-known/oauth-authorization-server/mc', (c) => c.json(oauthMetadata));
+app.get('/.well-known/oauth-authorization-server/mcp', (c) => c.json(oauthMetadata));
+app.get('/.well-known/oauth-authorization-server/sse', (c) => c.json(oauthMetadata));
+
+// Instant Auto-Approve OAuth Authorisation Endpoint
+app.get('/oauth/authorize', (c) => {
+  const redirectUri = c.req.query('redirect_uri');
+  const state = c.req.query('state') || '';
+  if (redirectUri) {
+    const separator = redirectUri.includes('?') ? '&' : '?';
+    return c.redirect(`${redirectUri}${separator}code=tana_auth_success&state=${encodeURIComponent(state)}`);
+  }
+  return c.text('OAuth Authorisation Successful. You can close this window.');
+});
+
+// OAuth Token Exchange Endpoint
+app.post('/oauth/token', async (c) => {
+  return c.json({
+    access_token: 'tana_mcp_session_token_' + crypto.randomUUID(),
+    token_type: 'Bearer',
+    expires_in: 315360000,
+    scope: 'mcp'
+  });
+});
+
+app.get('/oauth/userinfo', (c) => {
+  return c.json({
+    sub: 'kavia',
+    name: 'Kavia',
+    email: 'krshirkoohi@gmail.com'
+  });
+});
 
 // OpenAI AI Plugin Manifest
 app.get('/.well-known/ai-plugin.json', (c) => {
@@ -57,6 +163,21 @@ app.use('/api/*', async (c, next) => {
     }
   }
   await next();
+});
+
+// Root: Supports both GET overview and POST MCP JSON-RPC
+app.post('/', async (c) => {
+  try {
+    const body = await c.req.json();
+    if (body && body.jsonrpc === '2.0') {
+      const mcpHandler = new RemoteMCPHandler(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
+      const res = await mcpHandler.handleMessage(body);
+      return c.json(res);
+    }
+  } catch {
+    // Ignore and return root
+  }
+  return c.json({ error: 'Invalid JSON-RPC payload' }, 400);
 });
 
 // Root Health & Overview
