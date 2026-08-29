@@ -36,7 +36,6 @@ def parse_export(json_path: str, output_dir: str = "."):
     sql_file = out_p / "d1_seed.sql"
 
     sql_statements = []
-    sql_statements.append("BEGIN TRANSACTION;")
 
     count = 0
     for d in docs:
@@ -89,8 +88,6 @@ def parse_export(json_path: str, output_dir: str = "."):
             )
 
         count += 1
-
-    sql_statements.append("COMMIT;")
 
     print(f"Writing {len(sql_statements)} SQL statements to {sql_file}...")
     with open(sql_file, "w", encoding="utf-8") as f:

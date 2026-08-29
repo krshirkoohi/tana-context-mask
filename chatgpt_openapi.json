@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "YOUR_HTTPS_TUNNEL_URL",
-      "description": "Tana Context Mask HTTPS Tunnel Endpoint"
+      "url": "https://tana-context-mask.krshirkoohi.workers.dev",
+      "description": "Cloudflare Serverless Production"
     }
   ],
   "paths": {
