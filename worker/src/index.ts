@@ -6,9 +6,46 @@ import { HybridSearchService } from './services/search';
 import { EdgeReranker } from './services/reranker';
 import { EdgeSyncService } from './services/sync';
 
+import { openApiSpec } from './openapi';
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.use('*', cors());
+
+// OpenAI AI Plugin Manifest
+app.get('/.well-known/ai-plugin.json', (c) => {
+  return c.json({
+    schema_version: 'v1',
+    name_for_human: 'Tana Context Mask',
+    name_for_model: 'tana_context_mask',
+    description_for_human: 'Semantic and graph-aware context acquisition plugin for Tana Outliner.',
+    description_for_model: 'Proactively discovers, expands, and reranks relevant background context from Tana Outliner knowledge graph before answering user questions about notes, tasks, meetings, people, and projects.',
+    auth: {
+      type: 'none'
+    },
+    api: {
+      type: 'openapi',
+      url: 'https://tana-context-mask.krshirkoohi.workers.dev/openapi.json'
+    },
+    logo_url: 'https://tana-context-mask.krshirkoohi.workers.dev/logo.png',
+    contact_email: 'krshirkoohi@gmail.com',
+    legal_info_url: 'https://tana-context-mask.krshirkoohi.workers.dev'
+  });
+});
+
+// OpenAPI Spec Endpoint
+app.get('/openapi.json', (c) => {
+  return c.json(openApiSpec);
+});
+
+// Plugin Logo Endpoint
+app.get('/logo.png', (c) => {
+  c.header('Content-Type', 'image/svg+xml');
+  return c.body(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+    <circle cx="50" cy="50" r="45" fill="#5E5CE6" />
+    <path d="M30 50 L45 65 L70 35" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </svg>`);
+});
 
 // Authentication Middleware
 app.use('/api/*', async (c, next) => {
@@ -25,9 +62,11 @@ app.use('/api/*', async (c, next) => {
 // Root Health & Overview
 app.get('/', (c) => {
   return c.json({
-    name: 'Tana Context Mask (Cloudflare Serverless Edge)',
+    name: 'Tana Context Mask (Cloudflare Serverless Plugin)',
     status: 'online',
     version: '1.0.0',
+    plugin_manifest: '/.well-known/ai-plugin.json',
+    openapi_spec: '/openapi.json',
     endpoints: {
       acquireContext: 'POST /api/v1/context/acquire',
       search: 'POST /api/v1/search',
