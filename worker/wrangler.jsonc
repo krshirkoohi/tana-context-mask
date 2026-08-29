@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tana-context-mask",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-24",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // D1 Database Binding for Graph + FTS5 metadata
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tana-db",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ],
+
+  // Vectorize Index Binding for 384-dim BGE embeddings
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "tana-nodes-index"
+    }
+  ],
+
+  // Workers AI Binding for Edge Embeddings
+  "ai": {
+    "binding": "AI"
+  },
+
+  // Automated 15-minute background sync cron
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+
+  "vars": {
+    "ENVIRONMENT": "production"
+  }
+}

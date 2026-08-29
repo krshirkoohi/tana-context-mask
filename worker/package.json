@@ -1,0 +1,20 @@
+{
+  "name": "tana-context-mask-worker",
+  "version": "1.0.0",
+  "description": "Serverless edge context acquisition layer for Tana Outliner and ChatGPT Actions on Cloudflare Workers",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init:local": "wrangler d1 execute tana-db --local --file=schema.sql",
+    "db:init:remote": "wrangler d1 execute tana-db --remote --file=schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.7.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250224.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^3.114.0"
+  }
+}
