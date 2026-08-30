@@ -9,84 +9,39 @@ export class EdgeSyncService {
   ) {}
 
   /**
-   * Autonomous Full Workspace Backfill in the Cloud.
-   * Self-paginates and tracks progress in D1 sync_metadata across Cloudflare Cron ticks.
-   */
-  async backfillWorkspaceCloud(batchSize: number = 200): Promise<{ processed: number; done: boolean; status: string }> {
-    if (!this.tanaToken) {
-      return { processed: 0, done: true, status: 'skipped_no_token' };
-    }
-
-    try {
-      // 1. Get current backfill cursor from D1
-      const metaRow = await this.db.prepare(
-        "SELECT value FROM sync_metadata WHERE key = 'backfill_cursor'"
-      ).first<any>();
-      const cursor = metaRow?.value ? parseInt(metaRow.value, 10) : 0;
-
-      // 2. Fetch chunk from Tana Cloud API
-      const response = await fetch('https://europe-west1-tagr-prod.cloudfunctions.net/search', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.tanaToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          limit: batchSize,
-          offset: cursor
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Tana API returned HTTP ${response.status}`);
-      }
-
-      const data: any = await response.json();
-      const rawNodes = data.results || data.nodes || [];
-
-      if (rawNodes.length === 0) {
-        // Full workspace backfill completed
-        await this.db.prepare(
-          "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('backfill_complete', 'true', ?)"
-        ).bind(new Date().toISOString()).run();
-        return { processed: 0, done: true, status: 'backfill_completed' };
-      }
-
-      // 3. Ingest chunk into D1 and Vectorize
-      await this.ingestNodes(rawNodes);
-
-      // 4. Update cursor in D1
-      const nextCursor = cursor + rawNodes.length;
-      await this.db.prepare(
-        "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('backfill_cursor', ?, ?)"
-      ).bind(nextCursor.toString(), new Date().toISOString()).run();
-
-      return {
-        processed: rawNodes.length,
-        done: rawNodes.length < batchSize,
-        status: `processed_offset_${cursor}`
-      };
-    } catch (err: any) {
-      console.error('Cloud backfill error:', err);
-      return { processed: 0, done: false, status: `error: ${err.message}` };
-    }
-  }
-
-  /**
    * Helper to batch embed and upsert into D1 + Vectorize on the Edge.
+   * Handles deletion if inTrash is true, and updates tags, breadcrumbs, and vectors.
    */
-  private async ingestNodes(rawNodes: any[]): Promise<void> {
+  private async ingestNodes(rawNodes: any[]): Promise<number> {
     const statements = [];
     const vectorsToUpsert = [];
+    const vectorIdsToDelete: string[] = [];
+    let activeNodeCount = 0;
 
     for (const node of rawNodes) {
-      const id = node.id;
+      const id = node.id || node.nodeId;
       const name = (node.name || '').replace(/<[^>]+>/g, '').trim();
       const desc = (node.description || '').trim();
       const parentId = node.parentId || null;
       const now = new Date().toISOString();
 
-      if (!id || !name) continue;
+      if (!id) continue;
+
+      // If node was trashed or deleted in Tana, remove from D1 & Vectorize
+      if (node.inTrash === true) {
+        statements.push(
+          this.db.prepare(`DELETE FROM nodes WHERE id = ?`).bind(id),
+          this.db.prepare(`DELETE FROM node_fts WHERE id = ?`).bind(id),
+          this.db.prepare(`DELETE FROM tags WHERE node_id = ?`).bind(id),
+          this.db.prepare(`DELETE FROM fields WHERE node_id = ?`).bind(id),
+          this.db.prepare(`DELETE FROM edges WHERE source_id = ? OR target_id = ?`).bind(id, id)
+        );
+        vectorIdsToDelete.push(id);
+        continue;
+      }
+
+      if (!name) continue;
+      activeNodeCount++;
 
       statements.push(
         this.db.prepare(`
@@ -106,14 +61,17 @@ export class EdgeSyncService {
       );
 
       // Handle tags if present
-      if (Array.isArray(node.supertags)) {
+      const tagsList = Array.isArray(node.tags) ? node.tags : (Array.isArray(node.supertags) ? node.supertags : []);
+      if (tagsList.length > 0) {
         statements.push(this.db.prepare(`DELETE FROM tags WHERE node_id = ?`).bind(id));
-        for (const st of node.supertags) {
-          const tagId = typeof st === 'string' ? st : st.id;
+        for (const st of tagsList) {
+          const tagId = typeof st === 'string' ? st : (st.id || st.name);
           const tagName = typeof st === 'string' ? st : (st.name || st.id);
-          statements.push(
-            this.db.prepare(`INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)`).bind(id, tagId, tagName)
-          );
+          if (tagId && tagName) {
+            statements.push(
+              this.db.prepare(`INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)`).bind(id, tagId, tagName)
+            );
+          }
         }
       }
 
@@ -143,27 +101,54 @@ export class EdgeSyncService {
     if (vectorsToUpsert.length > 0) {
       await this.vectorize.upsert(vectorsToUpsert);
     }
+
+    if (vectorIdsToDelete.length > 0) {
+      try {
+        await this.vectorize.deleteByIds(vectorIdsToDelete);
+      } catch {
+        // Ignore if vectors not in index
+      }
+    }
+
+    return activeNodeCount;
   }
 
   /**
-   * Incremental sync using the official Tana Remote MCP JSON-RPC 2.0 endpoint.
-   * Only fetches nodes edited in the last lookback window (default 1 day) to stay well within rate limits.
+   * Incremental Delta Sync using Tana Remote MCP JSON-RPC 2.0.
+   * Leverages millisecond timestamp cursor (`edited.since`) with a 5-minute safety overlap window.
    */
-  async syncRecentNodes(lookbackDays: number = 1): Promise<{ updatedCount: number; status: string }> {
+  async syncRecentNodes(lookbackDays: number = 1): Promise<{ updatedCount: number; status: string; queryUsed: any }> {
     if (!this.tanaToken) {
       console.warn('TANA_API_TOKEN is not configured; skipping sync');
-      return { updatedCount: 0, status: 'skipped_no_token' };
+      return { updatedCount: 0, status: 'skipped_no_token', queryUsed: null };
     }
 
     try {
+      // 1. Retrieve persistent millisecond cursor from D1
+      const cursorRow = await this.db.prepare(
+        "SELECT value FROM sync_metadata WHERE key = 'last_sync_timestamp_ms'"
+      ).first<any>();
+
+      let queryFilter: any;
+      const nowMs = Date.now();
+
+      if (cursorRow?.value) {
+        const lastSyncMs = parseInt(cursorRow.value, 10);
+        // 5-minute safety overlap window (300,000 ms) to avoid boundary misses
+        const sinceMs = Math.max(0, lastSyncMs - (5 * 60 * 1000));
+        queryFilter = { edited: { since: sinceMs } };
+      } else {
+        queryFilter = { edited: { last: lookbackDays } };
+      }
+
       const payload = {
         jsonrpc: '2.0',
         method: 'tools/call',
         params: {
           name: 'search_nodes',
           arguments: {
-            query: { edited: { last: lookbackDays } },
-            limit: 100
+            query: queryFilter,
+            limit: 200
           }
         },
         id: 1
@@ -204,20 +189,32 @@ export class EdgeSyncService {
       }
 
       if (rawNodes.length === 0) {
-        return { updatedCount: 0, status: 'no_changes' };
+        // Advance cursor timestamp even if no changes
+        await this.db.prepare(`
+          INSERT OR REPLACE INTO sync_metadata (key, value, updated_at)
+          VALUES ('last_sync_timestamp_ms', ?, ?)
+        `).bind(nowMs.toString(), new Date().toISOString()).run();
+
+        return { updatedCount: 0, status: 'no_changes', queryUsed: queryFilter };
       }
 
-      await this.ingestNodes(rawNodes);
+      const ingestedCount = await this.ingestNodes(rawNodes);
 
+      // Record successful sync metadata & timestamp in D1
       await this.db.prepare(`
         INSERT OR REPLACE INTO sync_metadata (key, value, updated_at)
         VALUES ('last_sync', ?, ?)
       `).bind(new Date().toISOString(), new Date().toISOString()).run();
 
-      return { updatedCount: rawNodes.length, status: 'success' };
+      await this.db.prepare(`
+        INSERT OR REPLACE INTO sync_metadata (key, value, updated_at)
+        VALUES ('last_sync_timestamp_ms', ?, ?)
+      `).bind(nowMs.toString(), new Date().toISOString()).run();
+
+      return { updatedCount: rawNodes.length, status: 'success', queryUsed: queryFilter };
     } catch (err: any) {
-      console.error('Tana MCP sync error:', err);
-      return { updatedCount: 0, status: `error: ${err.message}` };
+      console.error('Tana MCP delta sync error:', err);
+      return { updatedCount: 0, status: `error: ${err.message}`, queryUsed: null };
     }
   }
 
@@ -227,14 +224,14 @@ export class EdgeSyncService {
   async getSyncStats(): Promise<Record<string, any>> {
     const countRes = await this.db.prepare('SELECT count(*) as count FROM nodes').first<any>();
     const lastSyncRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync'").first<any>();
+    const lastSyncMsRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync_timestamp_ms'").first<any>();
     const backfillCompRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'backfill_complete'").first<any>();
-    const cursorRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'backfill_cursor'").first<any>();
 
     return {
       total_nodes_d1: countRes?.count || 0,
       last_sync: lastSyncRes?.value || null,
+      last_sync_timestamp_ms: lastSyncMsRes?.value ? parseInt(lastSyncMsRes.value, 10) : null,
       backfill_complete: backfillCompRes?.value === 'true',
-      backfill_cursor: cursorRes?.value ? parseInt(cursorRes.value, 10) : 0,
       timestamp: new Date().toISOString()
     };
   }
