@@ -114,3 +114,14 @@ pytest
 # Context acquisition CLI
 python3 -m tana_context_mask.cli context "What are my current active projects?"
 ```
+
+---
+
+## 🏛️ Future Architecture: Source-Agnostic Property-Weighted Retrieval
+
+The retrieval engine (dense/sparse hybrid search + multi-hop ancestry + schema density + key-value property weighting) is fundamentally **source-agnostic**:
+
+* **Universal Entity & Property Schema:** Any structured second brain (Notion databases, filesystem Markdown frontmatter, GitHub DAG issues, Obsidian vaults) maps directly into our graph schema `(id, name, parent_id, fields, edges)`.
+* **Configurable Property Weights:** JSON key-value properties can be weighted dynamically so high-signal attributes (`Status`, `Tags`, `Priority`, `Assignees`, `Dates`) automatically drive reranking priority.
+* **MCP Portability:** By attaching standard Model Context Protocol (MCP) ingestion adapters, the engine can index and retrieve across any MCP-compliant tool without altering the core Cloudflare Edge Graph-RAG pipeline.
+
