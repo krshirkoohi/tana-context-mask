@@ -228,15 +228,17 @@ app.post('/api/v1/context/acquire', async (c) => {
     const reranker = new EdgeReranker();
 
     // 1. Semantic + Keyword Search
-    const seedNodes = await searchService.search(query, 15, 0.65);
+    const scoredSeeds = await searchService.searchWithScores(query, 20, 0.50);
+    const seedNodes = scoredSeeds.map(s => s.node);
+    const seedScoreMap = new Map<string, number>(scoredSeeds.map(s => [s.node.id, s.score]));
 
     // 2. 1-Hop Graph Expansion
-    const expandedPairs = await graphStore.expandSubgraph(seedNodes, 12);
+    const expandedPairs = await graphStore.expandSubgraph(seedNodes, 15);
 
     // 3. Score & Rerank Candidates
     const candidatePool = expandedPairs.map(p => ({
       node: p.node,
-      score: seedNodes.some(s => s.id === p.node.id) ? 0.85 : 0.45,
+      score: seedScoreMap.has(p.node.id) ? seedScoreMap.get(p.node.id)! : 0.45,
       reason: p.reason
     }));
 
@@ -332,11 +334,20 @@ app.get('/api/v1/nodes/:id', async (c) => {
   return c.json(nodes[0]);
 });
 
-// Cloud Sync Endpoint (Incremental Sync)
+// Cloud Sync Endpoint (Incremental Sync & Backfill)
 app.post('/api/v1/sync', async (c) => {
   const lookback = parseInt(c.req.query('lookback_days') || '1', 10);
+  const forceBackfill = c.req.query('force_backfill') === 'true' || c.req.query('backfill') === 'true';
   const syncService = new EdgeSyncService(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
-  const res = await syncService.syncRecentNodes(lookback);
+  const res = await syncService.syncRecentNodes(lookback, forceBackfill);
+  return c.json(res);
+});
+
+// Explicit Backfill Endpoint
+app.post('/api/v1/sync/backfill', async (c) => {
+  const lookback = parseInt(c.req.query('lookback_days') || '7', 10);
+  const syncService = new EdgeSyncService(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
+  const res = await syncService.syncRecentNodes(lookback, true);
   return c.json(res);
 });
 

@@ -18,11 +18,58 @@ class MirrorEngine:
 
     def sync_incremental(self, lookback_days: int = 1) -> Dict[str, Any]:
         """
-        Poll Tana Remote MCP for recently edited nodes and update local mirror and vector index.
+        Poll Tana Remote MCP across multiple facets (created, edited, day calendar nodes)
+        and update local mirror and vector index with full coverage.
         """
-        query = {"edited": {"last": lookback_days}}
-        raw_nodes = self.client.search_nodes(query, limit=100) or []
-        
+        node_map: Dict[str, Dict[str, Any]] = {}
+
+        # Facet 1: Created nodes in lookback
+        created_nodes = self.client.search_nodes({"created": {"last": lookback_days}}, limit=1000) or []
+        for n in created_nodes:
+            if n.get("id"):
+                node_map[n["id"]] = n
+
+        # If created nodes hit 1000 cap, partition
+        if len(created_nodes) >= 1000:
+            partitions = [
+                {"and": [{"created": {"last": lookback_days}}, {"has": "tag"}]},
+                {"and": [{"created": {"last": lookback_days}}, {"not": {"has": "tag"}}]},
+                {"and": [{"created": {"last": lookback_days}}, {"is": "calendarNode"}]},
+                {"and": [{"created": {"last": lookback_days}}, {"is": "todo"}]},
+                {"and": [{"created": {"last": lookback_days}}, {"is": "entity"}]}
+            ]
+            for p in partitions:
+                p_nodes = self.client.search_nodes(p, limit=1000) or []
+                for n in p_nodes:
+                    if n.get("id"):
+                        node_map[n["id"]] = n
+
+        # Facet 2: Edited nodes in lookback
+        edited_nodes = self.client.search_nodes({"edited": {"last": lookback_days}}, limit=1000) or []
+        for n in edited_nodes:
+            if n.get("id"):
+                node_map[n["id"]] = n
+
+        # Facet 3: Day calendar nodes (hasType Day = 1Kcq0q_pf5Fn)
+        day_nodes = self.client.search_nodes({"hasType": "1Kcq0q_pf5Fn"}, limit=100) or []
+        for d in day_nodes:
+            did = d.get("id")
+            if did:
+                node_map[did] = d
+                children = self.client.get_children(did, limit=200) or []
+                child_ids = []
+                for c in children:
+                    cid = c.get("id")
+                    if cid:
+                        child_ids.append(cid)
+                        if cid not in node_map:
+                            c["parentId"] = did
+                            node_map[cid] = c
+                        else:
+                            node_map[cid]["parentId"] = did
+                d["children"] = child_ids
+
+        raw_nodes = list(node_map.values())
         updated_nodes: List[TanaNode] = []
         vectors_to_update: List[Dict[str, Any]] = []
         
@@ -31,31 +78,49 @@ class MirrorEngine:
             if not node_id:
                 continue
             
-            name = raw.get("name", "")
-            desc = raw.get("description", "")
+            raw_name = raw.get("name", "")
+            name = re.sub(r'<[^>]+>', '', str(raw_name)).strip()
+            desc = (raw.get("description") or "").strip()
             parent_id = raw.get("parentId")
+            created_at = raw.get("created")
+            doc_type = raw.get("docType")
             
             # Check existing content hash
             existing_node = self.db.get_node(node_id)
             c_hash = SQLiteStore.calculate_content_hash(name, desc)
             
-            if existing_node and existing_node.content_hash == c_hash:
-                continue # No content change
+            if existing_node and existing_node.content_hash == c_hash and existing_node.parent_id == parent_id:
+                continue # No content or hierarchy change
             
             # Fetch tags or field details if available
             supertags = []
-            if "supertags" in raw and isinstance(raw["supertags"], list):
+            if "tags" in raw and isinstance(raw["tags"], list):
+                for st in raw["tags"]:
+                    if isinstance(st, dict):
+                        supertags.append(NodeTag(tag_id=st.get("id", ""), tag_name=st.get("name", "")))
+                    elif isinstance(st, str):
+                        supertags.append(NodeTag(tag_id=st, tag_name=st))
+            elif "supertags" in raw and isinstance(raw["supertags"], list):
                 for st in raw["supertags"]:
                     if isinstance(st, dict):
                         supertags.append(NodeTag(tag_id=st.get("id", ""), tag_name=st.get("name", "")))
+                    elif isinstance(st, str):
+                        supertags.append(NodeTag(tag_id=st, tag_name=st))
             
+            children = raw.get("children", [])
+            s_hash = SQLiteStore.calculate_structure_hash(parent_id, children, [t.tag_name for t in supertags])
+
             node = TanaNode(
                 id=node_id,
                 name=name,
                 description=desc,
+                doc_type=doc_type,
                 parent_id=parent_id,
+                created_at=created_at,
                 content_hash=c_hash,
+                structure_hash=s_hash,
                 supertags=supertags,
+                children=children,
                 updated_at=datetime.now().isoformat()
             )
             updated_nodes.append(node)

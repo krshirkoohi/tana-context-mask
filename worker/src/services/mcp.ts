@@ -116,11 +116,13 @@ export class RemoteMCPHandler {
         const query = (toolArgs.query || task).trim();
         const maxNodes = toolArgs.max_nodes || 6;
 
-        const seedNodes = await searchService.search(query, 15, 0.65);
-        const expandedPairs = await graphStore.expandSubgraph(seedNodes, 12);
+        const scoredSeeds = await searchService.searchWithScores(query, 20, 0.50);
+        const seedNodes = scoredSeeds.map(s => s.node);
+        const seedScoreMap = new Map<string, number>(scoredSeeds.map(s => [s.node.id, s.score]));
+        const expandedPairs = await graphStore.expandSubgraph(seedNodes, 15);
         const candidatePool = expandedPairs.map(p => ({
           node: p.node,
-          score: seedNodes.some(s => s.id === p.node.id) ? 0.85 : 0.45,
+          score: seedScoreMap.has(p.node.id) ? seedScoreMap.get(p.node.id)! : 0.45,
           reason: p.reason
         }));
         const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes);

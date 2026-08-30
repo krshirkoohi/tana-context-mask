@@ -8,6 +8,26 @@ export interface SearchHit {
   source: 'vector' | 'keyword' | 'hybrid';
 }
 
+const STOPWORDS = new Set([
+  'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an', 'and',
+  'any', 'are', 'as', 'at', 'be', 'because', 'been', 'before', 'being',
+  'below', 'between', 'both', 'but', 'by', 'can', 'did', 'do', 'does', 'doing',
+  'down', 'during', 'each', 'few', 'for', 'from', 'further', 'had', 'has', 'have',
+  'having', 'he', 'her', 'here', 'hers', 'him', 'his', 'how', 'i', 'if', 'in',
+  'into', 'is', 'it', 'its', 'me', 'more', 'most', 'my', 'no', 'nor', 'not',
+  'of', 'off', 'on', 'once', 'only', 'or', 'other', 'our', 'ours', 'out', 'over',
+  'own', 'same', 'she', 'should', 'so', 'some', 'such', 'than', 'that', 'the',
+  'their', 'theirs', 'them', 'then', 'there', 'these', 'they', 'this', 'those',
+  'through', 'to', 'too', 'under', 'until', 'up', 'very', 'was', 'we', 'were',
+  'what', 'when', 'where', 'which', 'while', 'who', 'whom', 'why', 'with',
+  'would', 'you', 'your', 'yours'
+]);
+
+export interface ScoredNode {
+  node: TanaNode;
+  score: number;
+}
+
 export class HybridSearchService {
   constructor(
     private db: D1Database,
@@ -31,31 +51,37 @@ export class HybridSearchService {
   }
 
   /**
-   * Performs hybrid search across Cloudflare Vectorize and D1 FTS5.
+   * Performs hybrid search returning nodes with their calibrated fusion score.
    */
-  async search(query: string, limit: number = 20, alpha: number = 0.65): Promise<TanaNode[]> {
+  async searchWithScores(query: string, limit: number = 20, alpha: number = 0.50): Promise<ScoredNode[]> {
     // 1. Vector Search via Vectorize
     const vectorPromise = (async () => {
       try {
         const queryVector = await this.embedQuery(query);
         const vectorResults = await this.vectorize.query(queryVector, {
-          topK: limit,
+          topK: limit * 2,
           returnValues: false,
           returnMetadata: 'none'
         });
-        return vectorResults.matches.map(m => ({ id: m.id, score: m.score }));
+        return (vectorResults.matches || []).map(m => ({ id: m.id, score: m.score }));
       } catch (err) {
         console.error('Vector search error:', err);
         return [];
       }
     })();
 
-    // 2. Keyword Search via D1 FTS5
+    // 2. Keyword Search via D1 FTS5 (with stopword filtering and phrase matching)
     const keywordPromise = (async () => {
       try {
-        const cleanTerms = query.match(/\w+/g) || [];
-        if (cleanTerms.length === 0) return [];
-        const ftsQuery = cleanTerms.map(t => `"${t}"*`).join(' OR ');
+        const rawTokens = (query.toLowerCase().match(/\w+/g) || []);
+        const meaningfulTerms = rawTokens.filter(t => !STOPWORDS.has(t) && t.length > 1);
+        const searchTerms = meaningfulTerms.length > 0 ? meaningfulTerms : rawTokens.filter(t => t.length > 1);
+
+        if (searchTerms.length === 0) return [];
+        
+        // Exact phrase prefix + individual token prefix OR
+        const phraseTerm = `"${searchTerms.join(' ')}"`;
+        const ftsQuery = [phraseTerm, ...searchTerms.map(t => `"${t}"*`)].join(' OR ');
 
         const { results } = await this.db
           .prepare(`
@@ -66,13 +92,13 @@ export class HybridSearchService {
             ORDER BY rank_score ASC
             LIMIT ?
           `)
-          .bind(ftsQuery, limit)
+          .bind(ftsQuery, limit * 2)
           .all<any>();
 
-        return (results || []).map((r: any) => {
-          const rawBm25 = Math.max(0.0, -Number(r.rank_score));
-          const normScore = rawBm25 / (1.0 + rawBm25);
-          return { id: r.id, score: normScore };
+        return (results || []).map((r: any, idx: number) => {
+          // Top keyword match receives 1.0, 2nd receives 0.96, etc.
+          const keywordScore = Math.max(0.4, 1.0 - (idx * 0.04));
+          return { id: r.id, score: keywordScore };
         });
       } catch (err) {
         console.error('FTS search error:', err);
@@ -94,11 +120,30 @@ export class HybridSearchService {
     }
 
     // Sort by final score
-    const rankedIds = Array.from(fusedScores.entries())
+    const sortedEntries = Array.from(fusedScores.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(entry => entry[0]);
+      .slice(0, limit);
 
-    return await this.graphStore.getNodesByIds(rankedIds);
+    const rankedIds = sortedEntries.map(e => e[0]);
+    const nodes = await this.graphStore.getNodesByIds(rankedIds);
+    const nodeMap = new Map<string, TanaNode>(nodes.map(n => [n.id, n]));
+
+    const scoredNodes: ScoredNode[] = [];
+    for (const [id, score] of sortedEntries) {
+      const node = nodeMap.get(id);
+      if (node) {
+        scoredNodes.push({ node, score });
+      }
+    }
+
+    return scoredNodes;
+  }
+
+  /**
+   * Performs hybrid search across Cloudflare Vectorize and D1 FTS5.
+   */
+  async search(query: string, limit: number = 20, alpha: number = 0.50): Promise<TanaNode[]> {
+    const scored = await this.searchWithScores(query, limit, alpha);
+    return scored.map(s => s.node);
   }
 }

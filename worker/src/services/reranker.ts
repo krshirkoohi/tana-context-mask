@@ -12,16 +12,23 @@ export class EdgeReranker {
 
     for (const c of candidates) {
       let finalScore = c.score;
+      const cleanName = c.node.name.trim();
+
+      // Penalize placeholder/empty template titles (e.g. "Title:", "Untitled") unless they have substantive descriptions
+      if ((cleanName.toLowerCase() === 'title:' || cleanName.toLowerCase() === 'untitled' || cleanName.length < 3) && (!c.node.description || c.node.description.length < 10)) {
+        finalScore -= 0.35;
+      }
 
       // 1. Exact Lexical Overlap Boost (Node Name & Description)
-      const nameAndDesc = `${c.node.name} ${c.node.description || ''}`.toLowerCase();
+      const nameAndDesc = `${cleanName} ${c.node.description || ''}`.toLowerCase();
       const nodeTokens = new Set((nameAndDesc.match(/\w+/g) || []));
       let nameOverlapCount = 0;
       for (const t of taskTokens) {
         if (nodeTokens.has(t)) nameOverlapCount++;
       }
       if (taskTokens.size > 0 && nameOverlapCount > 0) {
-        finalScore += Math.min(0.25, (nameOverlapCount / taskTokens.size) * 0.30);
+        const overlapRatio = nameOverlapCount / taskTokens.size;
+        finalScore += Math.min(0.40, overlapRatio * 0.45);
       }
 
       // 2. High-Priority Field Name & Value Scoring
@@ -77,6 +84,8 @@ export class EdgeReranker {
       let annotatedReason = c.reason;
       if (matchedFieldDetails.length > 0) {
         annotatedReason = `${c.reason} (Matched field: ${matchedFieldDetails.slice(0, 2).join(', ')})`;
+      } else if (nameOverlapCount === taskTokens.size && taskTokens.size > 0) {
+        annotatedReason = `High-confidence title & content match for '${task.slice(0, 40)}'`;
       }
 
       scored.push({
