@@ -10,11 +10,13 @@
 
 The service is fully deployed and active on **Cloudflare Serverless Edge**:
 
-* **Production URL:** `https://tana-context-mask.krshirkoohi.workers.dev`
-* **OpenAPI 3.1 Spec:** `https://tana-context-mask.krshirkoohi.workers.dev/openapi.json`
-* **MCP SSE Endpoint:** `https://tana-context-mask.krshirkoohi.workers.dev/sse`
-* **AI Plugin Manifest:** `https://tana-context-mask.krshirkoohi.workers.dev/.well-known/ai-plugin.json`
-* **Sync Health & Status:** `https://tana-context-mask.krshirkoohi.workers.dev/api/v1/sync/status`
+* **Production Base URL:** `https://tana-context-mask.krshirkoohi.workers.dev`
+* **Health Check:** [`/api/v1/health`](https://tana-context-mask.krshirkoohi.workers.dev/api/v1/health) — Live D1 node count & system status
+* **Sync & Mirror Status:** [`/api/v1/sync/status`](https://tana-context-mask.krshirkoohi.workers.dev/api/v1/sync/status) — Last sync timestamp, cursor & health
+* **OpenAPI 3.1 Spec:** [`/openapi.json`](https://tana-context-mask.krshirkoohi.workers.dev/openapi.json) — Custom GPT Action schema
+* **MCP SSE Endpoint:** [`/sse`](https://tana-context-mask.krshirkoohi.workers.dev/sse) — Model Context Protocol stream
+* **AI Plugin Manifest:** [`/.well-known/ai-plugin.json`](https://tana-context-mask.krshirkoohi.workers.dev/.well-known/ai-plugin.json)
+* **Cloudflare Dashboard:** [Cloudflare Dash](https://dash.cloudflare.com/) — Workers logs, D1 `tana-db`, Vectorize `tana-nodes-index`
 
 ### Cloud Architecture & Cadence
 * **Cloud Storage:** **97,254 nodes** mirrored in **Cloudflare D1 (SQLite)** & **Cloudflare Vectorize** (dense BGE embeddings).
