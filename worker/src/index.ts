@@ -212,104 +212,113 @@ app.get('/api/v1/health', async (c) => {
 // Primary Context Acquisition for ChatGPT Actions
 app.post('/api/v1/context/acquire', async (c) => {
   const startTime = Date.now();
-  const body = await c.req.json<ContextAcquisitionRequest>();
-  const task = (body.task || '').trim();
-  const query = (body.query || task).trim();
-  const maxNodes = body.max_nodes || 6;
-  const traceId = crypto.randomUUID();
+  try {
+    const body = await c.req.json<ContextAcquisitionRequest>();
+    const task = (body.task || '').trim();
+    const query = (body.query || task).trim();
+    const maxNodes = body.max_nodes || 6;
+    const traceId = crypto.randomUUID();
 
-  if (!task && !query) {
-    return c.json({ error: 'Task or query must be provided' }, 400);
-  }
+    if (!task && !query) {
+      return c.json({ error: 'Task or query must be provided' }, 400);
+    }
 
-  const graphStore = new D1GraphStore(c.env.DB);
-  const searchService = new HybridSearchService(c.env.DB, c.env.VECTORIZE, c.env.AI, graphStore);
-  const reranker = new EdgeReranker();
+    const graphStore = new D1GraphStore(c.env.DB);
+    const searchService = new HybridSearchService(c.env.DB, c.env.VECTORIZE, c.env.AI, graphStore);
+    const reranker = new EdgeReranker();
 
-  // 1. Semantic + Keyword Search
-  const seedNodes = await searchService.search(query, 15, 0.65);
+    // 1. Semantic + Keyword Search
+    const seedNodes = await searchService.search(query, 15, 0.65);
 
-  // 2. 1-Hop Graph Expansion
-  const expandedPairs = await graphStore.expandSubgraph(seedNodes, 12);
+    // 2. 1-Hop Graph Expansion
+    const expandedPairs = await graphStore.expandSubgraph(seedNodes, 12);
 
-  // 3. Score & Rerank Candidates
-  const candidatePool = expandedPairs.map(p => ({
-    node: p.node,
-    score: seedNodes.some(s => s.id === p.node.id) ? 0.85 : 0.45,
-    reason: p.reason
-  }));
+    // 3. Score & Rerank Candidates
+    const candidatePool = expandedPairs.map(p => ({
+      node: p.node,
+      score: seedNodes.some(s => s.id === p.node.id) ? 0.85 : 0.45,
+      reason: p.reason
+    }));
 
-  const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes);
+    const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes);
 
-  // 4. Format Markdown Context Packet
-  const contextNodes: ContextNode[] = [];
-  const mdSections: string[] = [];
+    // 4. Format Markdown Context Packet
+    const contextNodes: ContextNode[] = [];
+    const mdSections: string[] = [];
 
-  mdSections.push(`### 🌐 Tana Context Mask: Retrieved Knowledge Graph`);
-  mdSections.push(`> **Task:** ${task}`);
-  mdSections.push(`> **Trace ID:** \`${traceId}\` | **Nodes Selected:** ${rankedCandidates.length} of ${candidatePool.length} evaluated\n`);
+    mdSections.push(`### 🌐 Tana Context Mask: Retrieved Knowledge Graph`);
+    mdSections.push(`> **Task:** ${task}`);
+    mdSections.push(`> **Trace ID:** \`${traceId}\` | **Nodes Selected:** ${rankedCandidates.length} of ${candidatePool.length} evaluated\n`);
 
-  for (let i = 0; i < rankedCandidates.length; i++) {
-    const { node, score, reason } = rankedCandidates[i];
-    const tagsBadge = node.supertags.map(t => `\`#${t.tag_name}\``).join(' ');
-    const deepLink = node.deep_link || `https://app.tana.inc/?nodeid=${node.id}`;
+    for (let i = 0; i < rankedCandidates.length; i++) {
+      const { node, score, reason } = rankedCandidates[i];
+      const tagsBadge = node.supertags.map(t => `\`#${t.tag_name}\``).join(' ');
+      const deepLink = node.deep_link || `https://app.tana.inc/?nodeid=${node.id}`;
 
-    const fieldsDict: Record<string, string> = {};
-    for (const f of node.fields) {
-      if (f.value_text || f.value_node_id) {
-        fieldsDict[f.field_name] = f.value_text || f.value_node_id || '';
+      const fieldsDict: Record<string, string> = {};
+      for (const f of node.fields) {
+        if (f.value_text || f.value_node_id) {
+          fieldsDict[f.field_name] = f.value_text || f.value_node_id || '';
+        }
       }
+
+      contextNodes.push({
+        id: node.id,
+        name: node.name,
+        description: node.description || '',
+        supertags: node.supertags.map(t => t.tag_name),
+        fields: fieldsDict,
+        breadcrumbs: node.breadcrumbs,
+        children_snippets: [],
+        references: node.references,
+        backlinks: node.backlinks,
+        inclusion_reason: reason,
+        relevance_score: score,
+        deep_link: deepLink
+      });
+
+      const itemLines = [
+        `#### ${i + 1}. [${node.name}](${deepLink}) ${tagsBadge}`,
+        `- **Tana ID:** \`tana:${node.id}\` | **Relevance:** ${score.toFixed(2)}`,
+        `- **Why included:** ${reason}`
+      ];
+
+      if (node.breadcrumbs && node.breadcrumbs.length > 0) {
+        itemLines.push(`- **Hierarchy:** ${node.breadcrumbs.join(' > ')}`);
+      }
+
+      if (node.description) {
+        itemLines.push(`- **Description:** ${node.description}`);
+      }
+
+      const fieldsList = Object.entries(fieldsDict).map(([k, v]) => `\`${k}\`: ${v}`).join(', ');
+      if (fieldsList) {
+        itemLines.push(`- **Fields:** ${fieldsList}`);
+      }
+
+      mdSections.push(itemLines.join('\n'));
     }
 
-    contextNodes.push({
-      id: node.id,
-      name: node.name,
-      description: node.description || '',
-      supertags: node.supertags.map(t => t.tag_name),
-      fields: fieldsDict,
-      breadcrumbs: node.breadcrumbs,
-      children_snippets: [],
-      references: node.references,
-      backlinks: node.backlinks,
-      inclusion_reason: reason,
-      relevance_score: score,
-      deep_link: deepLink
-    });
+    const latencyMs = Date.now() - startTime;
+    const formattedMarkdown = mdSections.join('\n\n');
 
-    const itemLines = [
-      `#### ${i + 1}. [${node.name}](${deepLink}) ${tagsBadge}`,
-      `- **Tana ID:** \`tana:${node.id}\` | **Relevance:** ${score.toFixed(2)}`,
-      `- **Why included:** ${reason}`
-    ];
+    const packet: ContextPacket = {
+      trace_id: traceId,
+      task: task,
+      summary: `Acquired ${contextNodes.length} contextual nodes from Tana edge mirror in ${latencyMs}ms.`,
+      formatted_context_markdown: formattedMarkdown,
+      nodes: contextNodes,
+      total_candidates_examined: candidatePool.length,
+      graph_expansion_count: expandedPairs.length - seedNodes.length,
+      latency_ms: latencyMs,
+      timestamp: new Date().toISOString()
+    };
 
-    if (node.description) {
-      itemLines.push(`- **Description:** ${node.description}`);
-    }
-
-    const fieldsList = Object.entries(fieldsDict).map(([k, v]) => `\`${k}\`: ${v}`).join(', ');
-    if (fieldsList) {
-      itemLines.push(`- **Fields:** ${fieldsList}`);
-    }
-
-    mdSections.push(itemLines.join('\n'));
+    return c.json(packet);
+  } catch (err: any) {
+    console.error('Context acquire error:', err);
+    return c.json({ error: err.message, stack: err.stack }, 500);
   }
-
-  const latencyMs = Date.now() - startTime;
-  const formattedMarkdown = mdSections.join('\n\n');
-
-  const packet: ContextPacket = {
-    trace_id: traceId,
-    task: task,
-    summary: `Acquired ${contextNodes.length} contextual nodes from Tana edge mirror in ${latencyMs}ms.`,
-    formatted_context_markdown: formattedMarkdown,
-    nodes: contextNodes,
-    total_candidates_examined: candidatePool.length,
-    graph_expansion_count: expandedPairs.length - seedNodes.length,
-    latency_ms: latencyMs,
-    timestamp: new Date().toISOString()
-  };
-
-  return c.json(packet);
 });
 
 // Single node inspection
@@ -323,19 +332,12 @@ app.get('/api/v1/nodes/:id', async (c) => {
   return c.json(nodes[0]);
 });
 
-// Cloud Sync Endpoint (Incremental or Full Backfill)
+// Cloud Sync Endpoint (Incremental Sync)
 app.post('/api/v1/sync', async (c) => {
-  const mode = c.req.query('mode') || 'incremental';
   const lookback = parseInt(c.req.query('lookback_days') || '1', 10);
   const syncService = new EdgeSyncService(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
-
-  if (mode === 'full') {
-    const res = await syncService.backfillWorkspaceCloud(250);
-    return c.json(res);
-  } else {
-    const res = await syncService.syncRecentNodes(lookback);
-    return c.json(res);
-  }
+  const res = await syncService.syncRecentNodes(lookback);
+  return c.json(res);
 });
 
 // Cloud Sync & Mirror Status
@@ -351,17 +353,9 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil((async () => {
       const syncService = new EdgeSyncService(env.DB, env.VECTORIZE, env.AI, env.TANA_API_TOKEN);
-      const stats = await syncService.getSyncStats();
-
-      if (!stats.backfill_complete) {
-        console.log(`[Cloud Cron] Advancing full workspace cloud backfill (cursor: ${stats.backfill_cursor})...`);
-        const res = await syncService.backfillWorkspaceCloud(250);
-        console.log('[Cloud Cron] Backfill chunk result:', res);
-      } else {
-        console.log('[Cloud Cron] Running automated 15-minute Tana incremental diff sync...');
-        const res = await syncService.syncRecentNodes(1);
-        console.log('[Cloud Cron] Incremental sync result:', res);
-      }
+      console.log('[Cloud Cron] Running automated 15-minute Tana incremental diff sync...');
+      const res = await syncService.syncRecentNodes(1);
+      console.log('[Cloud Cron] Incremental sync result:', res);
     })());
   }
 };
