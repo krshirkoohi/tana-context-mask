@@ -94,26 +94,86 @@ Use these 3 test cases over the next few days to verify real-world behavior:
 
 ---
 
-## 📦 Local CLI / Dev Setup
+## 📋 Requirements & Prerequisites
+
+To deploy and use `tana-context-mask`, you need the following accounts and access:
+
+### 1. Account Requirements
+* **Tana Pro Account:** 
+  * A paid **Tana Pro** account is required to use Tana's hosted cloud MCP endpoint (`https://app.tana.inc/mcp`).
+  * In Tana, go to **Settings → API Tokens** and generate a **Personal Access Token (PAT)**.
+* **Cloudflare Account (Free or Paid):**
+  * Required to host the serverless edge worker, **Cloudflare D1 (SQLite)**, **Vectorize**, and **Workers AI (BGE embeddings)**.
+* **ChatGPT Plus / Team / Enterprise (Optional for Custom GPTs):**
+  * Required if you wish to attach the OpenAPI action to a Custom GPT in ChatGPT (iOS or Web).
+* **Python Runtime (For CLI / Local Package):**
+  * Python `3.10` or higher.
+
+---
+
+## 📦 Installation & Setup Guide
+
+### Option 1: Install as a Python Package / CLI
 
 ```bash
+# Install directly from GitHub
+pip install git+https://github.com/krshirkoohi/tana-context-mask.git
+
+# Or install editable from a cloned repo
+git clone https://github.com/krshirkoohi/tana-context-mask.git
+cd tana-context-mask
 pip install -e .
 ```
 
-Ensure `.env` contains your Pro Personal Access Token:
+#### Configure Environment:
+Create a `.env` file in your working directory:
 ```env
-TANA_TOKEN=eyJ0eXAiOiJKV1QiLC...
-TANA_URL=https://app.tana.inc/mcp
+TANA_TOKEN=eyJ0eXAiOiJKV1QiLC...    # Your Tana Pro Personal Access Token
+TANA_URL=https://app.tana.inc/mcp     # Tana Hosted Remote MCP Endpoint
 ```
 
-### Local Testing:
+#### Querying from the CLI:
 ```bash
-# Run test suite
-pytest
-
-# Context acquisition CLI
-python3 -m tana_context_mask.cli context "What are my current active projects?"
+# Test semantic context retrieval
+tana-context-mask context "What are my active goals and projects?"
 ```
+
+---
+
+### Option 2: Deploy Your Own 24/7 Cloudflare Worker
+
+```bash
+cd worker
+npm install
+
+# 1. Create your remote Cloudflare D1 Database and Vectorize Index
+npx wrangler d1 create tana-db
+npx wrangler vectorize create tana-nodes-index --dimensions=384 --metric=cosine
+
+# 2. Update wrangler.jsonc with your database_id and index_name
+
+# 3. Store your encrypted Tana Pro PAT secret in Cloudflare
+npx wrangler secret put TANA_API_TOKEN
+
+# 4. Deploy to Cloudflare Serverless Edge
+npx wrangler deploy
+```
+
+---
+
+### Option 3: Connect to ChatGPT (Custom GPT Action)
+
+1. Open ChatGPT → **Explore GPTs** → **Create a GPT** → **Configure**.
+2. Scroll to **Actions** → Click **Create new action**.
+3. Click **Import from URL** and paste your worker's OpenAPI schema:
+   ```
+   https://<your-worker-subdomain>.workers.dev/openapi.json
+   ```
+4. Set **Authentication** to `None` (or `API Key` if `API_KEY` environment secret is set).
+5. In your GPT Instructions, add:
+   ```
+   Always call the acquireContext tool before answering questions about the user's projects, notes, meetings, or life status to ground answers in verified Tana notes with deep links.
+   ```
 
 ---
 
@@ -124,4 +184,5 @@ The retrieval engine (dense/sparse hybrid search + multi-hop ancestry + schema d
 * **Universal Entity & Property Schema:** Any structured second brain (Notion databases, filesystem Markdown frontmatter, GitHub DAG issues, Obsidian vaults) maps directly into our graph schema `(id, name, parent_id, fields, edges)`.
 * **Configurable Property Weights:** JSON key-value properties can be weighted dynamically so high-signal attributes (`Status`, `Tags`, `Priority`, `Assignees`, `Dates`) automatically drive reranking priority.
 * **MCP Portability:** By attaching standard Model Context Protocol (MCP) ingestion adapters, the engine can index and retrieve across any MCP-compliant tool without altering the core Cloudflare Edge Graph-RAG pipeline.
+
 
