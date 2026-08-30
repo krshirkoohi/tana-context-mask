@@ -126,6 +126,12 @@ export class RemoteMCPHandler {
           reason: p.reason
         }));
         const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes);
+        const selectedNodes = rankedCandidates.map(r => r.node);
+
+        const [_, childrenSnippetsMap] = await Promise.all([
+          graphStore.resolveAncestry(selectedNodes, 6),
+          graphStore.resolveChildSnippets(selectedNodes, 8)
+        ]);
 
         const mdSections: string[] = [];
         mdSections.push(`### 🌐 Tana Context Mask: Retrieved Knowledge Graph`);
@@ -133,8 +139,9 @@ export class RemoteMCPHandler {
 
         for (let i = 0; i < rankedCandidates.length; i++) {
           const { node, score, reason } = rankedCandidates[i];
-          const tagsBadge = node.supertags.map(t => `\`#${t.tag_name}\``).join(' ');
+          const tagsBadge = (node.supertags || []).map(t => `\`#${t.tag_name}\``).join(' ');
           const deepLink = node.deep_link || `https://app.tana.inc/?nodeid=${node.id}`;
+          const snippets = childrenSnippetsMap.get(node.id) || [];
 
           const itemLines = [
             `#### ${i + 1}. [${node.name}](${deepLink}) ${tagsBadge}`,
@@ -142,7 +149,21 @@ export class RemoteMCPHandler {
             `- **Why included:** ${reason}`
           ];
 
-          if (node.description) itemLines.push(`- **Description:** ${node.description}`);
+          if (node.breadcrumbs && node.breadcrumbs.length > 0) {
+            itemLines.push(`- **Hierarchy:** ${node.breadcrumbs.join(' > ')}`);
+          }
+
+          if (node.description) {
+            itemLines.push(`- **Description:** ${node.description}`);
+          }
+
+          if (snippets.length > 0) {
+            itemLines.push(`- **Sub-Items:**`);
+            for (const s of snippets) {
+              itemLines.push(`  - ${s}`);
+            }
+          }
+
           mdSections.push(itemLines.join('\n'));
         }
 

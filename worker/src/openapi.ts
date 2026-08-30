@@ -32,8 +32,8 @@ export const openApiSpec = {
     },
     "/api/v1/context/acquire": {
       "post": {
-        "summary": "Acquire Context for AI Task",
-        "description": "Proactively discovers, expands, and reranks relevant background context from Tana knowledge graph before answering a user request.",
+        "summary": "Acquire Context for AI Task (POST)",
+        "description": "Discovers, expands, and reranks relevant background context from Tana knowledge graph before answering a user request.",
         "operationId": "acquireContext",
         "requestBody": {
           "required": true,
@@ -57,11 +57,44 @@ export const openApiSpec = {
             }
           }
         }
+      },
+      "get": {
+        "summary": "Acquire Context for AI Task (GET)",
+        "description": "Discovers, expands, and reranks relevant background context from Tana knowledge graph via query parameters.",
+        "operationId": "acquireContextGet",
+        "parameters": [
+          {
+            "name": "task",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "User task or inquiry"
+          },
+          {
+            "name": "max_nodes",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 6 },
+            "description": "Maximum nodes to retrieve"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Context Packet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextPacket"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/search": {
       "post": {
-        "summary": "Hybrid Search",
+        "summary": "Hybrid Search (POST)",
         "description": "Direct hybrid semantic and keyword search across Tana corpus.",
         "operationId": "searchNodes",
         "requestBody": {
@@ -81,6 +114,38 @@ export const openApiSpec = {
         },
         "responses": {
           "200": { "description": "Search Results" }
+        }
+      },
+      "get": {
+        "summary": "Hybrid Search (GET)",
+        "description": "Direct hybrid semantic and keyword search across Tana corpus via query parameters.",
+        "operationId": "searchNodesGet",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Search Results" }
+        }
+      }
+    },
+    "/api/v1/sync/status": {
+      "get": {
+        "summary": "Sync & Indexing Telemetry",
+        "description": "Returns current node count, indexing lag, and last sync timestamps.",
+        "operationId": "getSyncStatus",
+        "responses": {
+          "200": { "description": "Sync Status" }
         }
       }
     },

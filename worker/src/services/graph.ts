@@ -180,6 +180,34 @@ export class D1GraphStore {
   }
 
   /**
+   * Hydrates child snippet names for a list of nodes up to maxSnippetsPerNode.
+   */
+  async resolveChildSnippets(nodes: TanaNode[], maxSnippetsPerNode: number = 6): Promise<Map<string, string[]>> {
+    const allChildIds: string[] = [];
+    for (const n of nodes) {
+      if (n.children && n.children.length > 0) {
+        allChildIds.push(...n.children.slice(0, maxSnippetsPerNode));
+      }
+    }
+
+    if (allChildIds.length === 0) return new Map();
+
+    const childNodes = await this.getNodesByIds(allChildIds);
+    const childMap = new Map<string, string>(childNodes.map(c => [c.id, c.name]));
+
+    const result = new Map<string, string[]>();
+    for (const n of nodes) {
+      const snippets: string[] = [];
+      for (const cid of (n.children || []).slice(0, maxSnippetsPerNode)) {
+        const name = childMap.get(cid);
+        if (name && name.trim()) snippets.push(name.trim());
+      }
+      result.set(n.id, snippets);
+    }
+    return result;
+  }
+
+  /**
    * Expands context around semantic seed nodes using asymmetric budget:
    * - Up to 6 hops upward (Ancestry / Containers)
    * - Up to 3 hops downward (Children / Tasks)

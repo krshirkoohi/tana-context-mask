@@ -209,18 +209,17 @@ app.get('/api/v1/health', async (c) => {
   });
 });
 
-// Primary Context Acquisition for ChatGPT Actions
-app.post('/api/v1/context/acquire', async (c) => {
+// Helper function for Context Acquisition
+async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, rawMaxNodes?: number) {
   const startTime = Date.now();
   try {
-    const body = await c.req.json<ContextAcquisitionRequest>();
-    const task = (body.task || '').trim();
-    const query = (body.query || task).trim();
-    const maxNodes = body.max_nodes || 6;
+    const task = (rawTask || '').trim();
+    const query = (rawQuery || task).trim();
+    const maxNodes = rawMaxNodes || 6;
     const traceId = crypto.randomUUID();
 
     if (!task && !query) {
-      return c.json({ error: 'Task or query must be provided' }, 400);
+      return c.json({ error: 'Task or query parameter must be provided' }, 400);
     }
 
     const graphStore = new D1GraphStore(c.env.DB);
@@ -243,8 +242,15 @@ app.post('/api/v1/context/acquire', async (c) => {
     }));
 
     const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes);
+    const selectedNodes = rankedCandidates.map(r => r.node);
 
-    // 4. Format Markdown Context Packet
+    // 4. Resolve Breadcrumbs and Child Snippets in parallel
+    const [_, childrenSnippetsMap] = await Promise.all([
+      graphStore.resolveAncestry(selectedNodes, 6),
+      graphStore.resolveChildSnippets(selectedNodes, 8)
+    ]);
+
+    // 5. Format Markdown Context Packet
     const contextNodes: ContextNode[] = [];
     const mdSections: string[] = [];
 
@@ -254,11 +260,12 @@ app.post('/api/v1/context/acquire', async (c) => {
 
     for (let i = 0; i < rankedCandidates.length; i++) {
       const { node, score, reason } = rankedCandidates[i];
-      const tagsBadge = node.supertags.map(t => `\`#${t.tag_name}\``).join(' ');
+      const tagsBadge = (node.supertags || []).map(t => `\`#${t.tag_name}\``).join(' ');
       const deepLink = node.deep_link || `https://app.tana.inc/?nodeid=${node.id}`;
+      const snippets = childrenSnippetsMap.get(node.id) || [];
 
       const fieldsDict: Record<string, string> = {};
-      for (const f of node.fields) {
+      for (const f of node.fields || []) {
         if (f.value_text || f.value_node_id) {
           fieldsDict[f.field_name] = f.value_text || f.value_node_id || '';
         }
@@ -268,12 +275,12 @@ app.post('/api/v1/context/acquire', async (c) => {
         id: node.id,
         name: node.name,
         description: node.description || '',
-        supertags: node.supertags.map(t => t.tag_name),
+        supertags: (node.supertags || []).map(t => t.tag_name),
         fields: fieldsDict,
-        breadcrumbs: node.breadcrumbs,
-        children_snippets: [],
-        references: node.references,
-        backlinks: node.backlinks,
+        breadcrumbs: node.breadcrumbs || [],
+        children_snippets: snippets,
+        references: node.references || [],
+        backlinks: node.backlinks || [],
         inclusion_reason: reason,
         relevance_score: score,
         deep_link: deepLink
@@ -296,6 +303,13 @@ app.post('/api/v1/context/acquire', async (c) => {
       const fieldsList = Object.entries(fieldsDict).map(([k, v]) => `\`${k}\`: ${v}`).join(', ');
       if (fieldsList) {
         itemLines.push(`- **Fields:** ${fieldsList}`);
+      }
+
+      if (snippets.length > 0) {
+        itemLines.push(`- **Sub-Items:**`);
+        for (const s of snippets) {
+          itemLines.push(`  - ${s}`);
+        }
       }
 
       mdSections.push(itemLines.join('\n'));
@@ -321,6 +335,83 @@ app.post('/api/v1/context/acquire', async (c) => {
     console.error('Context acquire error:', err);
     return c.json({ error: err.message, stack: err.stack }, 500);
   }
+}
+
+// Primary Context Acquisition for ChatGPT Actions (POST & GET)
+app.post('/api/v1/context/acquire', async (c) => {
+  let body: any = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // Non-JSON or empty body
+  }
+  const task = (body.task || body.query || body.prompt || body.q || body.input || body.message || c.req.query('task') || c.req.query('query') || c.req.query('q') || '').trim();
+  const query = (body.query || body.q || task).trim();
+  const maxNodes = body.max_nodes || parseInt(c.req.query('max_nodes') || '6', 10);
+  return handleAcquireContext(c, task, query, maxNodes);
+});
+
+app.get('/api/v1/context/acquire', async (c) => {
+  const task = (c.req.query('task') || c.req.query('query') || c.req.query('q') || c.req.query('prompt') || c.req.query('input') || '').trim();
+  const query = (c.req.query('query') || c.req.query('q') || task).trim();
+  const maxNodes = parseInt(c.req.query('max_nodes') || '6', 10);
+  return handleAcquireContext(c, task, query, maxNodes);
+});
+
+// Hybrid Search Endpoint (OpenAPI searchNodes - POST & GET)
+app.post('/api/v1/search', async (c) => {
+  try {
+    let query = '';
+    let limit = 20;
+    try {
+      const body = await c.req.json();
+      query = (body.query || body.q || body.task || '').trim();
+      limit = body.limit || 20;
+    } catch {
+      query = (c.req.query('query') || c.req.query('q') || c.req.query('task') || '').trim();
+      limit = parseInt(c.req.query('limit') || '20', 10);
+    }
+
+    if (!query) {
+      return c.json({ error: 'Query parameter required' }, 400);
+    }
+
+    const graphStore = new D1GraphStore(c.env.DB);
+    const searchService = new HybridSearchService(c.env.DB, c.env.VECTORIZE, c.env.AI, graphStore);
+    const scoredNodes = await searchService.searchWithScores(query, limit);
+
+    return c.json(scoredNodes.map(s => ({
+      id: s.node.id,
+      name: s.node.name,
+      description: s.node.description || '',
+      relevance_score: s.score,
+      supertags: s.node.supertags.map(t => t.tag_name),
+      breadcrumbs: s.node.breadcrumbs,
+      deep_link: s.node.deep_link
+    })));
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.get('/api/v1/search', async (c) => {
+  const query = (c.req.query('query') || c.req.query('q') || c.req.query('task') || '').trim();
+  const limit = parseInt(c.req.query('limit') || '20', 10);
+  if (!query) {
+    return c.json({ error: 'Query parameter required' }, 400);
+  }
+  const graphStore = new D1GraphStore(c.env.DB);
+  const searchService = new HybridSearchService(c.env.DB, c.env.VECTORIZE, c.env.AI, graphStore);
+  const scoredNodes = await searchService.searchWithScores(query, limit);
+  return c.json(scoredNodes.map(s => ({
+    id: s.node.id,
+    name: s.node.name,
+    description: s.node.description || '',
+    relevance_score: s.score,
+    supertags: s.node.supertags.map(t => t.tag_name),
+    breadcrumbs: s.node.breadcrumbs,
+    deep_link: s.node.deep_link
+  })));
 });
 
 // Single node inspection
