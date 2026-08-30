@@ -29,3 +29,7 @@ dev = [
 
 [project.scripts]
 tana-context-mask = "tana_context_mask.cli.main:cli_entrypoint"
+
+[tool.setuptools.packages.find]
+include = ["tana_context_mask*"]
+
