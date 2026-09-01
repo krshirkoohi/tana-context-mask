@@ -38,6 +38,15 @@ export interface TanaNode {
   backlinks: string[];
   breadcrumbs: string[];
   deep_link?: string;
+  effective_date?: string;
+  date_source?: string;
+  date_source_node_id?: string;
+  calendar_distance?: number;
+  calendar_path?: string;
+  ancestor_day_node_id?: string;
+  ancestor_week_node_id?: string;
+  ancestor_month_node_id?: string;
+  ancestor_year_node_id?: string;
 }
 
 export interface ContextAcquisitionRequest {
@@ -46,6 +55,10 @@ export interface ContextAcquisitionRequest {
   scope?: string;
   max_nodes?: number;
   include_children?: boolean;
+  target_date?: string;
+  date_from?: string;
+  date_to?: string;
+  temporal_mode?: 'none' | 'boost' | 'filter' | 'strict';
 }
 
 export interface ContextNode {
@@ -61,6 +74,9 @@ export interface ContextNode {
   inclusion_reason: string;
   relevance_score: number;
   deep_link: string;
+  effective_date?: string;
+  date_source?: string;
+  temporal_relationship?: string;
 }
 
 export interface ContextPacket {
@@ -73,10 +89,56 @@ export interface ContextPacket {
   graph_expansion_count: number;
   latency_ms: number;
   timestamp: string;
+  target_date?: string;
+  temporal_mode?: string;
+  insufficient_evidence?: boolean;
 }
 
 export interface ScoredCandidate {
   node: TanaNode;
   score: number;
   reason: string;
+}
+
+export interface SemanticSearchRequest {
+  query: string;
+  limit?: number;
+  tag_filter?: string;
+  target_date?: string;
+  date_from?: string;
+  date_to?: string;
+  temporal_mode?: 'none' | 'boost' | 'filter' | 'strict';
+  temporal_weight?: number;
+}
+
+export interface SearchResultItem {
+  id: string;
+  name: string;
+  description: string;
+  score: number;
+  semantic_score?: number;
+  lexical_score?: number;
+  breadcrumbs: string[];
+  tags: string[];
+  parent_id?: string;
+  last_updated?: string;
+  effective_date?: string;
+  date_source?: string;
+  date_source_node_id?: string;
+  calendar_path?: string;
+  ancestor_day_node_id?: string;
+  ancestor_month_node_id?: string;
+  ancestor_year_node_id?: string;
+  temporal_relationship?: string;
+  temporal_score?: number;
+}
+
+export interface SearchResponse {
+  query: string;
+  total_hits: number;
+  results: SearchResultItem[];
+  latency_ms: number;
+  target_date?: string;
+  temporal_mode?: string;
+  insufficient_evidence?: boolean;
 }

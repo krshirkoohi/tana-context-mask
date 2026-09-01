@@ -8,6 +8,10 @@ class ContextAcquisitionRequest(BaseModel):
     max_nodes: int = 8
     include_children: bool = True
     include_references: bool = True
+    target_date: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    temporal_mode: Optional[str] = None
 
 class ContextNode(BaseModel):
     id: str
@@ -22,6 +26,9 @@ class ContextNode(BaseModel):
     inclusion_reason: str = ""
     relevance_score: float = 0.0
     deep_link: str = ""
+    effective_date: Optional[str] = None
+    date_source: Optional[str] = None
+    temporal_relationship: Optional[str] = None
 
 class ContextPacket(BaseModel):
     trace_id: str
@@ -33,6 +40,9 @@ class ContextPacket(BaseModel):
     graph_expansion_count: int
     latency_ms: float
     timestamp: str
+    target_date: Optional[str] = None
+    temporal_mode: Optional[str] = None
+    insufficient_evidence: bool = False
 
 class TraceRecord(BaseModel):
     trace_id: str

@@ -20,9 +20,9 @@ export class EdgeSyncService {
   ) {}
 
   /**
-   * Helper to call Tana Remote MCP JSON-RPC 2.0 tool endpoint.
+   * Helper to call Tana Remote MCP JSON-RPC 2.0 tool endpoint with retry & backoff.
    */
-  private async callTanaMCP(toolName: string, args: Record<string, any>): Promise<any> {
+  private async callTanaMCP(toolName: string, args: Record<string, any>, maxRetries: number = 3): Promise<any> {
     if (!this.tanaToken) return null;
 
     const payload = {
@@ -35,37 +35,57 @@ export class EdgeSyncService {
       id: 1
     };
 
-    const res = await fetch('https://app.tana.inc/mcp', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.tanaToken}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream'
-      },
-      body: JSON.stringify(payload)
-    });
+    let attempt = 0;
+    while (attempt < maxRetries) {
+      attempt++;
+      try {
+        const res = await fetch('https://app.tana.inc/mcp', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.tanaToken}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/event-stream'
+          },
+          body: JSON.stringify(payload)
+        });
 
-    if (!res.ok) {
-      throw new Error(`Tana MCP responded with HTTP ${res.status}`);
-    }
-
-    const jsonRpcRes: any = await res.json();
-    if (jsonRpcRes.error) {
-      throw new Error(`Tana MCP error: ${jsonRpcRes.error.message || JSON.stringify(jsonRpcRes.error)}`);
-    }
-
-    if (jsonRpcRes.result && Array.isArray(jsonRpcRes.result.content)) {
-      for (const item of jsonRpcRes.result.content) {
-        if (item.type === 'text' && item.text) {
-          try {
-            return JSON.parse(item.text);
-          } catch {
-            return item.text;
+        if (res.status === 429 || (res.status >= 500 && res.status <= 504)) {
+          if (attempt < maxRetries) {
+            const backoffMs = Math.min(4000, 500 * Math.pow(2, attempt));
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            continue;
           }
         }
+
+        if (!res.ok) {
+          throw new Error(`Tana MCP responded with HTTP ${res.status}`);
+        }
+
+        const jsonRpcRes: any = await res.json();
+        if (jsonRpcRes.error) {
+          throw new Error(`Tana MCP error: ${jsonRpcRes.error.message || JSON.stringify(jsonRpcRes.error)}`);
+        }
+
+        if (jsonRpcRes.result && Array.isArray(jsonRpcRes.result.content)) {
+          for (const item of jsonRpcRes.result.content) {
+            if (item.type === 'text' && item.text) {
+              try {
+                return JSON.parse(item.text);
+              } catch {
+                return item.text;
+              }
+            }
+          }
+        }
+
+        return jsonRpcRes.result;
+      } catch (err: any) {
+        if (attempt >= maxRetries) {
+          throw err;
+        }
+        const backoffMs = Math.min(3000, 400 * Math.pow(2, attempt));
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
-    } else if (jsonRpcRes.result) {
-      return jsonRpcRes.result;
     }
     return null;
   }

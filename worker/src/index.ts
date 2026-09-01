@@ -210,12 +210,21 @@ app.get('/api/v1/health', async (c) => {
 });
 
 // Helper function for Context Acquisition
-async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, rawMaxNodes?: number) {
+async function handleAcquireContext(
+  c: any,
+  rawTask: string,
+  rawQuery?: string,
+  rawMaxNodes?: number,
+  rawTargetDate?: string,
+  rawTemporalMode?: string
+) {
   const startTime = Date.now();
   try {
     const task = (rawTask || '').trim();
     const query = (rawQuery || task).trim();
     const maxNodes = rawMaxNodes || 6;
+    const targetDate = rawTargetDate;
+    const temporalMode = rawTemporalMode || 'none';
     const traceId = crypto.randomUUID();
 
     if (!task && !query) {
@@ -226,10 +235,36 @@ async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, 
     const searchService = new HybridSearchService(c.env.DB, c.env.VECTORIZE, c.env.AI, graphStore);
     const reranker = new EdgeReranker();
 
-    // 1. Semantic + Keyword Search
-    const scoredSeeds = await searchService.searchWithScores(query, 20, 0.50);
-    const seedNodes = scoredSeeds.map(s => s.node);
-    const seedScoreMap = new Map<string, number>(scoredSeeds.map(s => [s.node.id, s.score]));
+    // 1. Semantic + Temporal Search
+    const searchResp = await searchService.searchWithTemporal({
+      query,
+      limit: 20,
+      target_date: targetDate,
+      temporal_mode: temporalMode as any
+    });
+
+    const seedNodes = searchResp.results.map(r => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      is_done: false,
+      in_trash: false,
+      supertags: r.tags.map(t => ({ tag_id: t, tag_name: t })),
+      fields: [],
+      children: [],
+      references: [],
+      backlinks: [],
+      breadcrumbs: r.breadcrumbs,
+      effective_date: r.effective_date,
+      date_source: r.date_source,
+      date_source_node_id: r.date_source_node_id,
+      calendar_path: r.calendar_path,
+      ancestor_day_node_id: r.ancestor_day_node_id,
+      ancestor_month_node_id: r.ancestor_month_node_id,
+      ancestor_year_node_id: r.ancestor_year_node_id
+    }));
+
+    const seedScoreMap = new Map<string, number>(searchResp.results.map(r => [r.id, r.score]));
 
     // 2. 1-Hop Graph Expansion
     const expandedPairs = await graphStore.expandSubgraph(seedNodes, 15);
@@ -241,7 +276,7 @@ async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, 
       reason: p.reason
     }));
 
-    const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes);
+    const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes, targetDate, undefined, undefined, temporalMode);
     const selectedNodes = rankedCandidates.map(r => r.node);
 
     // 4. Resolve Breadcrumbs and Child Snippets in parallel
@@ -256,7 +291,14 @@ async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, 
 
     mdSections.push(`### 🌐 Tana Context Mask: Retrieved Knowledge Graph`);
     mdSections.push(`> **Task:** ${task}`);
+    if (targetDate) {
+      mdSections.push(`> **Target Date:** \`${targetDate}\` | **Temporal Mode:** \`${temporalMode}\``);
+    }
     mdSections.push(`> **Trace ID:** \`${traceId}\` | **Nodes Selected:** ${rankedCandidates.length} of ${candidatePool.length} evaluated\n`);
+
+    if (searchResp.insufficient_evidence) {
+      mdSections.push(`> ⚠️ **Notice:** Insufficient contemporaneous evidence found in Tana for the requested historical period.\n`);
+    }
 
     for (let i = 0; i < rankedCandidates.length; i++) {
       const { node, score, reason } = rankedCandidates[i];
@@ -283,7 +325,9 @@ async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, 
         backlinks: node.backlinks || [],
         inclusion_reason: reason,
         relevance_score: score,
-        deep_link: deepLink
+        deep_link: deepLink,
+        effective_date: node.effective_date,
+        date_source: node.date_source
       });
 
       const itemLines = [
@@ -291,6 +335,10 @@ async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, 
         `- **Tana ID:** \`tana:${node.id}\` | **Relevance:** ${score.toFixed(2)}`,
         `- **Why included:** ${reason}`
       ];
+
+      if (node.effective_date) {
+        itemLines.push(`- **Calendar Provenance:** \`${node.effective_date}\` (source: \`${node.date_source || 'day_node'}\`)`);
+      }
 
       if (node.breadcrumbs && node.breadcrumbs.length > 0) {
         itemLines.push(`- **Hierarchy:** ${node.breadcrumbs.join(' > ')}`);
@@ -327,7 +375,10 @@ async function handleAcquireContext(c: any, rawTask: string, rawQuery?: string, 
       total_candidates_examined: candidatePool.length,
       graph_expansion_count: expandedPairs.length - seedNodes.length,
       latency_ms: latencyMs,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      target_date: targetDate,
+      temporal_mode: temporalMode,
+      insufficient_evidence: searchResp.insufficient_evidence
     };
 
     return c.json(packet);
@@ -348,29 +399,35 @@ app.post('/api/v1/context/acquire', async (c) => {
   const task = (body.task || body.query || body.prompt || body.q || body.input || body.message || c.req.query('task') || c.req.query('query') || c.req.query('q') || '').trim();
   const query = (body.query || body.q || task).trim();
   const maxNodes = body.max_nodes || parseInt(c.req.query('max_nodes') || '6', 10);
-  return handleAcquireContext(c, task, query, maxNodes);
+  const targetDate = body.target_date || c.req.query('target_date');
+  const temporalMode = body.temporal_mode || c.req.query('temporal_mode');
+  return handleAcquireContext(c, task, query, maxNodes, targetDate, temporalMode);
 });
 
 app.get('/api/v1/context/acquire', async (c) => {
   const task = (c.req.query('task') || c.req.query('query') || c.req.query('q') || c.req.query('prompt') || c.req.query('input') || '').trim();
   const query = (c.req.query('query') || c.req.query('q') || task).trim();
   const maxNodes = parseInt(c.req.query('max_nodes') || '6', 10);
-  return handleAcquireContext(c, task, query, maxNodes);
+  const targetDate = c.req.query('target_date');
+  const temporalMode = c.req.query('temporal_mode');
+  return handleAcquireContext(c, task, query, maxNodes, targetDate, temporalMode);
 });
 
 // Hybrid Search Endpoint (OpenAPI searchNodes - POST & GET)
 app.post('/api/v1/search', async (c) => {
   try {
-    let query = '';
-    let limit = 20;
+    let body: any = {};
     try {
-      const body = await c.req.json();
-      query = (body.query || body.q || body.task || '').trim();
-      limit = body.limit || 20;
-    } catch {
-      query = (c.req.query('query') || c.req.query('q') || c.req.query('task') || '').trim();
-      limit = parseInt(c.req.query('limit') || '20', 10);
-    }
+      body = await c.req.json();
+    } catch {}
+
+    const query = (body.query || body.q || body.task || c.req.query('query') || c.req.query('q') || '').trim();
+    const limit = body.limit || parseInt(c.req.query('limit') || '20', 10);
+    const tagFilter = body.tag_filter || c.req.query('tag_filter');
+    const targetDate = body.target_date || c.req.query('target_date');
+    const dateFrom = body.date_from || c.req.query('date_from');
+    const dateTo = body.date_to || c.req.query('date_to');
+    const temporalMode = body.temporal_mode || c.req.query('temporal_mode') || 'none';
 
     if (!query) {
       return c.json({ error: 'Query parameter required' }, 400);
@@ -378,17 +435,17 @@ app.post('/api/v1/search', async (c) => {
 
     const graphStore = new D1GraphStore(c.env.DB);
     const searchService = new HybridSearchService(c.env.DB, c.env.VECTORIZE, c.env.AI, graphStore);
-    const scoredNodes = await searchService.searchWithScores(query, limit);
+    const resp = await searchService.searchWithTemporal({
+      query,
+      limit,
+      tag_filter: tagFilter,
+      target_date: targetDate,
+      date_from: dateFrom,
+      date_to: dateTo,
+      temporal_mode: temporalMode
+    });
 
-    return c.json(scoredNodes.map(s => ({
-      id: s.node.id,
-      name: s.node.name,
-      description: s.node.description || '',
-      relevance_score: s.score,
-      supertags: s.node.supertags.map(t => t.tag_name),
-      breadcrumbs: s.node.breadcrumbs,
-      deep_link: s.node.deep_link
-    })));
+    return c.json(resp);
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
@@ -397,21 +454,27 @@ app.post('/api/v1/search', async (c) => {
 app.get('/api/v1/search', async (c) => {
   const query = (c.req.query('query') || c.req.query('q') || c.req.query('task') || '').trim();
   const limit = parseInt(c.req.query('limit') || '20', 10);
+  const tagFilter = c.req.query('tag_filter');
+  const targetDate = c.req.query('target_date');
+  const dateFrom = c.req.query('date_from');
+  const dateTo = c.req.query('date_to');
+  const temporalMode = (c.req.query('temporal_mode') || 'none') as any;
+
   if (!query) {
     return c.json({ error: 'Query parameter required' }, 400);
   }
   const graphStore = new D1GraphStore(c.env.DB);
   const searchService = new HybridSearchService(c.env.DB, c.env.VECTORIZE, c.env.AI, graphStore);
-  const scoredNodes = await searchService.searchWithScores(query, limit);
-  return c.json(scoredNodes.map(s => ({
-    id: s.node.id,
-    name: s.node.name,
-    description: s.node.description || '',
-    relevance_score: s.score,
-    supertags: s.node.supertags.map(t => t.tag_name),
-    breadcrumbs: s.node.breadcrumbs,
-    deep_link: s.node.deep_link
-  })));
+  const resp = await searchService.searchWithTemporal({
+    query,
+    limit,
+    tag_filter: tagFilter,
+    target_date: targetDate,
+    date_from: dateFrom,
+    date_to: dateTo,
+    temporal_mode: temporalMode
+  });
+  return c.json(resp);
 });
 
 // Single node inspection

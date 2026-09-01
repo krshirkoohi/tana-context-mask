@@ -2,7 +2,7 @@ export const openApiSpec = {
   "openapi": "3.1.0",
   "info": {
     "title": "Tana Context Mask Plugin",
-    "description": "An embedding-backed, graph-aware semantic context acquisition plugin for Tana Outliner.",
+    "description": "An embedding-backed, graph-aware semantic context acquisition plugin for Tana Outliner with calendar-first temporal retrieval.",
     "version": "1.0.0"
   },
   "servers": [
@@ -76,6 +76,20 @@ export const openApiSpec = {
             "required": false,
             "schema": { "type": "integer", "default": 6 },
             "description": "Maximum nodes to retrieve"
+          },
+          {
+            "name": "target_date",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Target date (YYYY-MM-DD) for historical retrieval"
+          },
+          {
+            "name": "temporal_mode",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["none", "boost", "filter", "strict"], "default": "none" },
+            "description": "Temporal gating mode"
           }
         ],
         "responses": {
@@ -95,7 +109,7 @@ export const openApiSpec = {
     "/api/v1/search": {
       "post": {
         "summary": "Hybrid Search (POST)",
-        "description": "Direct hybrid semantic and keyword search across Tana corpus.",
+        "description": "Direct hybrid semantic and keyword search across Tana corpus with calendar provenance and temporal gating.",
         "operationId": "searchNodes",
         "requestBody": {
           "required": true,
@@ -105,7 +119,12 @@ export const openApiSpec = {
                 "type": "object",
                 "properties": {
                   "query": { "type": "string" },
-                  "limit": { "type": "integer", "default": 20 }
+                  "limit": { "type": "integer", "default": 20 },
+                  "tag_filter": { "type": "string" },
+                  "target_date": { "type": "string" },
+                  "date_from": { "type": "string" },
+                  "date_to": { "type": "string" },
+                  "temporal_mode": { "type": "string", "enum": ["none", "boost", "filter", "strict"], "default": "none" }
                 },
                 "required": ["query"]
               }
@@ -132,6 +151,18 @@ export const openApiSpec = {
             "in": "query",
             "required": false,
             "schema": { "type": "integer", "default": 20 }
+          },
+          {
+            "name": "target_date",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "temporal_mode",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["none", "boost", "filter", "strict"], "default": "none" }
           }
         ],
         "responses": {
@@ -177,7 +208,11 @@ export const openApiSpec = {
           "query": { "type": "string", "description": "Optional refined search query" },
           "scope": { "type": "string", "description": "Optional supertag scope filter" },
           "max_nodes": { "type": "integer", "default": 6, "description": "Maximum number of context nodes" },
-          "include_children": { "type": "boolean", "default": true, "description": "Whether to resolve child bullets" }
+          "include_children": { "type": "boolean", "default": true, "description": "Whether to resolve child bullets" },
+          "target_date": { "type": "string", "description": "Optional target date (YYYY-MM-DD)" },
+          "date_from": { "type": "string", "description": "Optional start date" },
+          "date_to": { "type": "string", "description": "Optional end date" },
+          "temporal_mode": { "type": "string", "enum": ["none", "boost", "filter", "strict"], "default": "none" }
         },
         "required": ["task"]
       },
@@ -193,7 +228,10 @@ export const openApiSpec = {
           "children_snippets": { "type": "array", "items": { "type": "string" } },
           "inclusion_reason": { "type": "string" },
           "relevance_score": { "type": "number" },
-          "deep_link": { "type": "string" }
+          "deep_link": { "type": "string" },
+          "effective_date": { "type": "string" },
+          "date_source": { "type": "string" },
+          "temporal_relationship": { "type": "string" }
         },
         "required": ["id", "name", "deep_link"]
       },
@@ -208,7 +246,10 @@ export const openApiSpec = {
           "total_candidates_examined": { "type": "integer" },
           "graph_expansion_count": { "type": "integer" },
           "latency_ms": { "type": "number" },
-          "timestamp": { "type": "string" }
+          "timestamp": { "type": "string" },
+          "target_date": { "type": "string" },
+          "temporal_mode": { "type": "string" },
+          "insufficient_evidence": { "type": "boolean" }
         },
         "required": ["trace_id", "task", "summary", "formatted_context_markdown", "nodes"]
       }

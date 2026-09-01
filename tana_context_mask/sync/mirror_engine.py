@@ -9,6 +9,7 @@ from ..storage.db import SQLiteStore
 from ..storage.vector_store import VectorStore
 from ..client.tana_mcp_client import TanaMCPClient
 from ..models.node import TanaNode, NodeTag, NodeField
+from ..engine.temporal import resolve_node_provenance
 
 class MirrorEngine:
     def __init__(self, db: Optional[SQLiteStore] = None, vector_store: Optional[VectorStore] = None, client: Optional[TanaMCPClient] = None):
@@ -123,6 +124,20 @@ class MirrorEngine:
                 children=children,
                 updated_at=datetime.now().isoformat()
             )
+
+            # Resolve calendar provenance
+            parents = self.db.get_parents_chain(node_id, max_depth=8)
+            prov = resolve_node_provenance(node, parents)
+            node.effective_date = prov["effective_date"]
+            node.date_source = prov["date_source"]
+            node.date_source_node_id = prov["date_source_node_id"]
+            node.calendar_distance = prov["calendar_distance"]
+            node.calendar_path = prov["calendar_path"]
+            node.ancestor_day_node_id = prov["ancestor_day_node_id"]
+            node.ancestor_week_node_id = prov["ancestor_week_node_id"]
+            node.ancestor_month_node_id = prov["ancestor_month_node_id"]
+            node.ancestor_year_node_id = prov["ancestor_year_node_id"]
+
             updated_nodes.append(node)
             
             if name or desc:
@@ -242,7 +257,29 @@ class MirrorEngine:
             if max_nodes and count >= max_nodes:
                 break
 
-        print(f"Parsed {len(parsed_nodes)} valid user nodes. Ingesting into SQLite in batches...")
+        print(f"Parsed {len(parsed_nodes)} valid user nodes. Resolving calendar provenance...")
+        node_lookup = {n.id: n for n in parsed_nodes}
+        for node in parsed_nodes:
+            parents = []
+            curr_pid = node.parent_id
+            depth = 0
+            while curr_pid and curr_pid in node_lookup and depth < 8:
+                p_node = node_lookup[curr_pid]
+                parents.append(p_node)
+                curr_pid = p_node.parent_id
+                depth += 1
+            prov = resolve_node_provenance(node, parents)
+            node.effective_date = prov["effective_date"]
+            node.date_source = prov["date_source"]
+            node.date_source_node_id = prov["date_source_node_id"]
+            node.calendar_distance = prov["calendar_distance"]
+            node.calendar_path = prov["calendar_path"]
+            node.ancestor_day_node_id = prov["ancestor_day_node_id"]
+            node.ancestor_week_node_id = prov["ancestor_week_node_id"]
+            node.ancestor_month_node_id = prov["ancestor_month_node_id"]
+            node.ancestor_year_node_id = prov["ancestor_year_node_id"]
+
+        print(f"Ingesting into SQLite in batches...")
         
         # Batch insert into SQLite
         for i in range(0, len(parsed_nodes), batch_size):

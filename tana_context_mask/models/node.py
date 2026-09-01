@@ -39,6 +39,17 @@ class TanaNode(BaseModel):
     backlinks: List[str] = Field(default_factory=list)
     breadcrumbs: List[str] = Field(default_factory=list)
 
+    # Calendar and Temporal Provenance
+    effective_date: Optional[str] = None  # Format: YYYY-MM-DD
+    date_source: Optional[str] = None  # 'day_node', 'field', 'explicit_rel', 'fallback_created', 'none'
+    date_source_node_id: Optional[str] = None
+    calendar_distance: Optional[int] = None
+    calendar_path: Optional[str] = None
+    ancestor_day_node_id: Optional[str] = None
+    ancestor_week_node_id: Optional[str] = None
+    ancestor_month_node_id: Optional[str] = None
+    ancestor_year_node_id: Optional[str] = None
+
     @property
     def deep_link(self) -> str:
         return f"https://app.tana.inc/?nodeid={self.id}"

@@ -39,15 +39,45 @@ class SQLiteStore:
                     structure_hash TEXT,
                     is_done INTEGER DEFAULT 0,
                     in_trash INTEGER DEFAULT 0,
+                    effective_date TEXT,
+                    date_source TEXT,
+                    date_source_node_id TEXT,
+                    calendar_distance INTEGER,
+                    calendar_path TEXT,
+                    ancestor_day_node_id TEXT,
+                    ancestor_week_node_id TEXT,
+                    ancestor_month_node_id TEXT,
+                    ancestor_year_node_id TEXT,
                     raw_json TEXT
                 )
             """)
             
-            # Indexes on parent and status
+            # Migration check: add missing columns to existing database
+            table_info = conn.execute("PRAGMA table_info(nodes)").fetchall()
+            existing_cols = {col["name"] for col in table_info}
+            new_cols = [
+                ("effective_date", "TEXT"),
+                ("date_source", "TEXT"),
+                ("date_source_node_id", "TEXT"),
+                ("calendar_distance", "INTEGER"),
+                ("calendar_path", "TEXT"),
+                ("ancestor_day_node_id", "TEXT"),
+                ("ancestor_week_node_id", "TEXT"),
+                ("ancestor_month_node_id", "TEXT"),
+                ("ancestor_year_node_id", "TEXT")
+            ]
+            for col_name, col_type in new_cols:
+                if col_name not in existing_cols:
+                    conn.execute(f"ALTER TABLE nodes ADD COLUMN {col_name} {col_type}")
+
+            # Indexes on parent, status, and temporal fields
             conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_doc_type ON nodes(doc_type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_trash ON nodes(in_trash)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_updated ON nodes(updated_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_effective_date ON nodes(effective_date)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_ancestor_day ON nodes(ancestor_day_node_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_ancestor_year ON nodes(ancestor_year_node_id)")
 
             # Edges Table
             conn.execute("""
@@ -179,6 +209,15 @@ class SQLiteStore:
                 c_hash, s_hash,
                 1 if node.is_done else 0,
                 1 if node.in_trash else 0,
+                node.effective_date,
+                node.date_source,
+                node.date_source_node_id,
+                node.calendar_distance,
+                node.calendar_path,
+                node.ancestor_day_node_id,
+                node.ancestor_week_node_id,
+                node.ancestor_month_node_id,
+                node.ancestor_year_node_id,
                 None
             ))
 
@@ -209,8 +248,11 @@ class SQLiteStore:
                 INSERT INTO nodes (
                     id, name, description, doc_type, parent_id,
                     created_at, updated_at, content_hash, structure_hash,
-                    is_done, in_trash, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    is_done, in_trash, effective_date, date_source,
+                    date_source_node_id, calendar_distance, calendar_path,
+                    ancestor_day_node_id, ancestor_week_node_id,
+                    ancestor_month_node_id, ancestor_year_node_id, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     description = excluded.description,
@@ -220,7 +262,16 @@ class SQLiteStore:
                     content_hash = excluded.content_hash,
                     structure_hash = excluded.structure_hash,
                     is_done = excluded.is_done,
-                    in_trash = excluded.in_trash
+                    in_trash = excluded.in_trash,
+                    effective_date = excluded.effective_date,
+                    date_source = excluded.date_source,
+                    date_source_node_id = excluded.date_source_node_id,
+                    calendar_distance = excluded.calendar_distance,
+                    calendar_path = excluded.calendar_path,
+                    ancestor_day_node_id = excluded.ancestor_day_node_id,
+                    ancestor_week_node_id = excluded.ancestor_week_node_id,
+                    ancestor_month_node_id = excluded.ancestor_month_node_id,
+                    ancestor_year_node_id = excluded.ancestor_year_node_id
             """, nodes_data)
 
             conn.executemany("DELETE FROM node_fts WHERE id = ?", fts_del_data)
@@ -323,9 +374,40 @@ class SQLiteStore:
                     children=list(dict.fromkeys(children_by_node.get(nid, []))),
                     references=list(dict.fromkeys(refs_by_node.get(nid, []))),
                     backlinks=list(dict.fromkeys(backlinks_by_node.get(nid, []))),
-                    breadcrumbs=breadcrumbs_memo[row["parent_id"]]
+                    breadcrumbs=breadcrumbs_memo[row["parent_id"]],
+                    effective_date=row["effective_date"] if "effective_date" in row.keys() else None,
+                    date_source=row["date_source"] if "date_source" in row.keys() else None,
+                    date_source_node_id=row["date_source_node_id"] if "date_source_node_id" in row.keys() else None,
+                    calendar_distance=row["calendar_distance"] if "calendar_distance" in row.keys() else None,
+                    calendar_path=row["calendar_path"] if "calendar_path" in row.keys() else None,
+                    ancestor_day_node_id=row["ancestor_day_node_id"] if "ancestor_day_node_id" in row.keys() else None,
+                    ancestor_week_node_id=row["ancestor_week_node_id"] if "ancestor_week_node_id" in row.keys() else None,
+                    ancestor_month_node_id=row["ancestor_month_node_id"] if "ancestor_month_node_id" in row.keys() else None,
+                    ancestor_year_node_id=row["ancestor_year_node_id"] if "ancestor_year_node_id" in row.keys() else None
                 ))
         return all_nodes
+
+    def get_nodes_by_date_range(self, date_from: str, date_to: str, limit: int = 200) -> List[TanaNode]:
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM nodes
+                WHERE in_trash = 0 AND effective_date IS NOT NULL
+                  AND effective_date >= ? AND effective_date <= ?
+                ORDER BY effective_date ASC
+                LIMIT ?
+            """, (date_from, date_to, limit)).fetchall()
+            return self._rows_to_nodes(conn, rows)
+
+    def get_day_nodes_in_range(self, date_from: str, date_to: str, limit: int = 100) -> List[TanaNode]:
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM nodes
+                WHERE in_trash = 0 AND date_source = 'day_node' AND calendar_distance = 0
+                  AND effective_date >= ? AND effective_date <= ?
+                ORDER BY effective_date ASC
+                LIMIT ?
+            """, (date_from, date_to, limit)).fetchall()
+            return self._rows_to_nodes(conn, rows)
 
     def _row_to_node(self, conn: sqlite3.Connection, row: sqlite3.Row) -> TanaNode:
         return self._rows_to_nodes(conn, [row])[0]

@@ -27,26 +27,57 @@ class MCPServer:
             {
                 "name": "acquire_context",
                 "description": "Proactively retrieve background context, hierarchy, and references from Tana knowledge graph for a given AI task or conversation topic.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": "The current task, question, or user objective."},
+                        "query": {"type": "string", "description": "Optional specific search query keywords."},
+                        "scope": {"type": "string", "description": "Optional supertag filter (e.g. 'Project', 'Task')."},
+                        "max_nodes": {"type": "integer", "description": "Maximum context nodes to return (default 8)."},
+                        "target_date": {"type": "string", "description": "Optional target date (YYYY-MM-DD) for historical context."},
+                        "temporal_mode": {"type": "string", "enum": ["none", "boost", "filter", "strict"], "description": "Temporal gating mode."}
+                    },
+                    "required": ["task"]
+                },
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "task": {"type": "string", "description": "The current task, question, or user objective."},
                         "query": {"type": "string", "description": "Optional specific search query keywords."},
                         "scope": {"type": "string", "description": "Optional supertag filter (e.g. 'Project', 'Task')."},
-                        "max_nodes": {"type": "integer", "description": "Maximum context nodes to return (default 8)."}
+                        "max_nodes": {"type": "integer", "description": "Maximum context nodes to return (default 8)."},
+                        "target_date": {"type": "string", "description": "Optional target date (YYYY-MM-DD) for historical context."},
+                        "temporal_mode": {"type": "string", "enum": ["none", "boost", "filter", "strict"], "description": "Temporal gating mode."}
                     },
                     "required": ["task"]
                 }
             },
             {
                 "name": "search_nodes",
-                "description": "Perform hybrid semantic and keyword search across the entire Tana workspace.",
+                "description": "Perform hybrid semantic and keyword search across the entire Tana workspace with calendar provenance and temporal gating.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search term or conceptual phrase."},
+                        "limit": {"type": "integer", "description": "Number of results to return (default 10)."},
+                        "tag_filter": {"type": "string", "description": "Optional tag name to filter by."},
+                        "target_date": {"type": "string", "description": "Optional target date (YYYY-MM-DD) for temporal proximity or historical query anchoring."},
+                        "date_from": {"type": "string", "description": "Optional start date (YYYY-MM-DD) filter."},
+                        "date_to": {"type": "string", "description": "Optional end date (YYYY-MM-DD) filter."},
+                        "temporal_mode": {"type": "string", "enum": ["none", "boost", "filter", "strict"], "description": "Temporal gating mode: 'none', 'boost' (decay reranking), 'filter' (range pruning), 'strict' (calendar verified occurrence only)."}
+                    },
+                    "required": ["query"]
+                },
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "The search term or conceptual phrase."},
                         "limit": {"type": "integer", "description": "Number of results to return (default 10)."},
-                        "tag_filter": {"type": "string", "description": "Optional tag name to filter by."}
+                        "tag_filter": {"type": "string", "description": "Optional tag name to filter by."},
+                        "target_date": {"type": "string", "description": "Optional target date (YYYY-MM-DD) for temporal proximity or historical query anchoring."},
+                        "date_from": {"type": "string", "description": "Optional start date (YYYY-MM-DD) filter."},
+                        "date_to": {"type": "string", "description": "Optional end date (YYYY-MM-DD) filter."},
+                        "temporal_mode": {"type": "string", "enum": ["none", "boost", "filter", "strict"], "description": "Temporal gating mode: 'none', 'boost' (decay reranking), 'filter' (range pruning), 'strict' (calendar verified occurrence only)."}
                     },
                     "required": ["query"]
                 }
@@ -54,6 +85,13 @@ class MCPServer:
             {
                 "name": "get_node_details",
                 "description": "Inspect a single Tana node with its parent breadcrumbs, immediate children, tags, and field values.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "node_id": {"type": "string", "description": "The Tana node ID."}
+                    },
+                    "required": ["node_id"]
+                },
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -65,6 +103,14 @@ class MCPServer:
             {
                 "name": "expand_graph",
                 "description": "Expand 1-2 hops of graph edges (parents, sub-items, references, backlinks) around a Tana node.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "node_id": {"type": "string", "description": "The seed node ID to expand from."},
+                        "hops": {"type": "integer", "description": "Graph depth (1 or 2)."}
+                    },
+                    "required": ["node_id"]
+                },
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -77,6 +123,13 @@ class MCPServer:
             {
                 "name": "sync_mirror",
                 "description": "Trigger synchronization with Tana Remote MCP or bootstrap from a local export.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["incremental", "bootstrap"], "description": "Sync mode."},
+                        "lookback_days": {"type": "integer", "description": "Days to look back for incremental sync."}
+                    }
+                },
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -88,6 +141,10 @@ class MCPServer:
             {
                 "name": "get_system_status",
                 "description": "Get current indexing status, total nodes in SQLite, and vector count in LanceDB.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                },
                 "parameters": {
                     "type": "object",
                     "properties": {}
@@ -101,7 +158,9 @@ class MCPServer:
                 task=args.get("task", ""),
                 query=args.get("query"),
                 scope=args.get("scope"),
-                max_nodes=args.get("max_nodes", 8)
+                max_nodes=args.get("max_nodes", 8),
+                target_date=args.get("target_date"),
+                temporal_mode=args.get("temporal_mode")
             )
             packet = self.context_builder.acquire_context(req)
             return {
@@ -109,14 +168,21 @@ class MCPServer:
                 "formatted_markdown": packet.formatted_context_markdown,
                 "node_count": len(packet.nodes),
                 "trace_id": packet.trace_id,
-                "latency_ms": packet.latency_ms
+                "latency_ms": packet.latency_ms,
+                "target_date": packet.target_date,
+                "temporal_mode": packet.temporal_mode,
+                "insufficient_evidence": packet.insufficient_evidence
             }
 
         elif name == "search_nodes":
             req = SemanticSearchRequest(
                 query=args.get("query", ""),
                 limit=args.get("limit", 10),
-                tag_filter=args.get("tag_filter")
+                tag_filter=args.get("tag_filter"),
+                target_date=args.get("target_date"),
+                date_from=args.get("date_from"),
+                date_to=args.get("date_to"),
+                temporal_mode=args.get("temporal_mode", "none")
             )
             resp = self.search_engine.search(req)
             return resp.model_dump()
@@ -179,7 +245,28 @@ class MCPServer:
                 msg_id = msg.get("id")
                 method = msg.get("method")
 
-                if method == "tools/list":
+                if method == "initialize":
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "result": {
+                            "protocolVersion": msg.get("params", {}).get("protocolVersion", "2024-11-05"),
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "tana-context-mask", "version": "1.0.0"}
+                        }
+                    }
+                    sys.stdout.write(json.dumps(resp) + "\n")
+                    sys.stdout.flush()
+
+                elif method == "notifications/initialized":
+                    continue
+
+                elif method == "ping":
+                    resp = {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+                    sys.stdout.write(json.dumps(resp) + "\n")
+                    sys.stdout.flush()
+
+                elif method == "tools/list":
                     resp = {
                         "jsonrpc": "2.0",
                         "id": msg_id,
@@ -209,10 +296,10 @@ class MCPServer:
                     sys.stdout.flush()
 
                 else:
-                    # Echo generic ack
-                    resp = {"jsonrpc": "2.0", "id": msg_id, "result": {}}
-                    sys.stdout.write(json.dumps(resp) + "\n")
-                    sys.stdout.flush()
+                    if msg_id is not None:
+                        resp = {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+                        sys.stdout.write(json.dumps(resp) + "\n")
+                        sys.stdout.flush()
 
             except Exception as e:
                 err_resp = {
@@ -229,3 +316,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
