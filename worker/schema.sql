@@ -11,12 +11,24 @@ CREATE TABLE IF NOT EXISTS nodes (
     content_hash TEXT,
     structure_hash TEXT,
     is_done INTEGER DEFAULT 0,
-    in_trash INTEGER DEFAULT 0
+    in_trash INTEGER DEFAULT 0,
+    effective_date TEXT,
+    date_source TEXT,
+    date_source_node_id TEXT,
+    calendar_distance INTEGER,
+    calendar_path TEXT,
+    ancestor_day_node_id TEXT,
+    ancestor_week_node_id TEXT,
+    ancestor_month_node_id TEXT,
+    ancestor_year_node_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_trash ON nodes(in_trash);
 CREATE INDEX IF NOT EXISTS idx_nodes_updated ON nodes(updated_at);
+CREATE INDEX IF NOT EXISTS idx_nodes_effective_date ON nodes(effective_date);
+CREATE INDEX IF NOT EXISTS idx_nodes_ancestor_day ON nodes(ancestor_day_node_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_ancestor_year ON nodes(ancestor_year_node_id);
 
 -- Full Text Search Index using SQLite FTS5
 CREATE VIRTUAL TABLE IF NOT EXISTS node_fts USING fts5(

@@ -3,6 +3,7 @@ import { D1GraphStore } from './graph';
 import { HybridSearchService } from './search';
 import { EdgeReranker } from './reranker';
 import { EdgeSyncService } from './sync';
+import { classifyTemporalRelationship } from './temporal';
 
 export interface JSONRPCRequest {
   jsonrpc: string;
@@ -62,19 +63,26 @@ export class RemoteMCPHandler {
                   task: { type: 'string', description: 'The user prompt, task, or question' },
                   query: { type: 'string', description: 'Optional refined search query' },
                   scope: { type: 'string', description: 'Optional supertag scope filter' },
-                  max_nodes: { type: 'integer', default: 6, description: 'Maximum number of context nodes' }
+                  max_nodes: { type: 'integer', default: 6, description: 'Maximum number of context nodes' },
+                  target_date: { type: 'string', description: 'Optional target date (YYYY-MM-DD) for historical context' },
+                  temporal_mode: { type: 'string', enum: ['none', 'boost', 'filter', 'strict'], description: 'Temporal gating mode' }
                 },
                 required: ['task']
               }
             },
             {
               name: 'search_nodes',
-              description: 'Direct hybrid semantic and keyword search across Tana corpus.',
+              description: 'Direct hybrid semantic and keyword search across Tana corpus with calendar provenance and temporal gating.',
               inputSchema: {
                 type: 'object',
                 properties: {
                   query: { type: 'string', description: 'Search query' },
-                  limit: { type: 'integer', default: 20, description: 'Max results' }
+                  limit: { type: 'integer', default: 20, description: 'Max results' },
+                  tag_filter: { type: 'string', description: 'Optional tag filter' },
+                  target_date: { type: 'string', description: 'Optional target date (YYYY-MM-DD)' },
+                  date_from: { type: 'string', description: 'Optional start date' },
+                  date_to: { type: 'string', description: 'Optional end date' },
+                  temporal_mode: { type: 'string', enum: ['none', 'boost', 'filter', 'strict'], description: 'Temporal gating mode' }
                 },
                 required: ['query']
               }
@@ -115,17 +123,45 @@ export class RemoteMCPHandler {
         const task = (toolArgs.task || '').trim();
         const query = (toolArgs.query || task).trim();
         const maxNodes = toolArgs.max_nodes || 6;
+        const targetDate = toolArgs.target_date;
+        const temporalMode = toolArgs.temporal_mode || 'none';
 
-        const scoredSeeds = await searchService.searchWithScores(query, 20, 0.50);
-        const seedNodes = scoredSeeds.map(s => s.node);
-        const seedScoreMap = new Map<string, number>(scoredSeeds.map(s => [s.node.id, s.score]));
+        const searchResp = await searchService.searchWithTemporal({
+          query,
+          limit: 20,
+          target_date: targetDate,
+          temporal_mode: temporalMode
+        });
+
+        const seedNodes = searchResp.results.map(r => ({
+          id: r.id,
+          name: r.name,
+          description: r.description,
+          is_done: false,
+          in_trash: false,
+          supertags: r.tags.map(t => ({ tag_id: t, tag_name: t })),
+          fields: [],
+          children: [],
+          references: [],
+          backlinks: [],
+          breadcrumbs: r.breadcrumbs,
+          effective_date: r.effective_date,
+          date_source: r.date_source,
+          date_source_node_id: r.date_source_node_id,
+          calendar_path: r.calendar_path,
+          ancestor_day_node_id: r.ancestor_day_node_id,
+          ancestor_month_node_id: r.ancestor_month_node_id,
+          ancestor_year_node_id: r.ancestor_year_node_id
+        }));
+
+        const seedScoreMap = new Map<string, number>(searchResp.results.map(r => [r.id, r.score]));
         const expandedPairs = await graphStore.expandSubgraph(seedNodes, 15);
         const candidatePool = expandedPairs.map(p => ({
           node: p.node,
           score: seedScoreMap.has(p.node.id) ? seedScoreMap.get(p.node.id)! : 0.45,
           reason: p.reason
         }));
-        const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes);
+        const rankedCandidates = reranker.rerank(task, candidatePool, maxNodes, targetDate, undefined, undefined, temporalMode);
         const selectedNodes = rankedCandidates.map(r => r.node);
 
         const [_, childrenSnippetsMap] = await Promise.all([
@@ -135,7 +171,15 @@ export class RemoteMCPHandler {
 
         const mdSections: string[] = [];
         mdSections.push(`### 🌐 Tana Context Mask: Retrieved Knowledge Graph`);
-        mdSections.push(`> **Task:** ${task}\n`);
+        mdSections.push(`> **Task:** ${task}`);
+        if (targetDate) {
+          mdSections.push(`> **Target Date:** \`${targetDate}\` | **Temporal Mode:** \`${temporalMode}\``);
+        }
+        mdSections.push('');
+
+        if (searchResp.insufficient_evidence) {
+          mdSections.push(`> ⚠️ **Notice:** Insufficient contemporaneous evidence found in Tana for the requested period.\n`);
+        }
 
         for (let i = 0; i < rankedCandidates.length; i++) {
           const { node, score, reason } = rankedCandidates[i];
@@ -143,11 +187,23 @@ export class RemoteMCPHandler {
           const deepLink = node.deep_link || `https://app.tana.inc/?nodeid=${node.id}`;
           const snippets = childrenSnippetsMap.get(node.id) || [];
 
+          const relClass = classifyTemporalRelationship(node, targetDate);
+          let relBadge = '';
+          if (relClass === 'contemporaneous') {
+            relBadge = ` \`[Contemporaneous · ${node.effective_date || 'verified'}]\``;
+          } else if (relClass === 'retrospective') {
+            relBadge = ` \`[Retrospective · recorded ${node.effective_date || 'later'}]\``;
+          }
+
           const itemLines = [
-            `#### ${i + 1}. [${node.name}](${deepLink}) ${tagsBadge}`,
+            `#### ${i + 1}. [${node.name}](${deepLink}) ${tagsBadge}${relBadge}`,
             `- **Tana ID:** \`tana:${node.id}\` | **Relevance:** ${score.toFixed(2)}`,
             `- **Why included:** ${reason}`
           ];
+
+          if (node.effective_date) {
+            itemLines.push(`- **Calendar Provenance:** \`${node.effective_date}\` (source: \`${node.date_source || 'day_node'}\`)`);
+          }
 
           if (node.breadcrumbs && node.breadcrumbs.length > 0) {
             itemLines.push(`- **Hierarchy:** ${node.breadcrumbs.join(' > ')}`);
@@ -184,7 +240,20 @@ export class RemoteMCPHandler {
       if (toolName === 'search_nodes') {
         const query = (toolArgs.query || '').trim();
         const limit = toolArgs.limit || 20;
-        const results = await searchService.search(query, limit);
+        const targetDate = toolArgs.target_date;
+        const dateFrom = toolArgs.date_from;
+        const dateTo = toolArgs.date_to;
+        const temporalMode = toolArgs.temporal_mode || 'none';
+
+        const resp = await searchService.searchWithTemporal({
+          query,
+          limit,
+          tag_filter: toolArgs.tag_filter,
+          target_date: targetDate,
+          date_from: dateFrom,
+          date_to: dateTo,
+          temporal_mode: temporalMode
+        });
 
         return {
           jsonrpc: '2.0',
@@ -193,13 +262,7 @@ export class RemoteMCPHandler {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(results.map(n => ({
-                  id: n.id,
-                  name: n.name,
-                  description: n.description,
-                  deep_link: n.deep_link,
-                  tags: n.supertags.map(t => t.tag_name)
-                })), null, 2)
+                text: JSON.stringify(resp, null, 2)
               }
             ]
           }

@@ -12,6 +12,7 @@ from ..models.search import SemanticSearchRequest
 from .semantic_search import SemanticSearchEngine
 from .graph_engine import GraphEngine
 from .reranker import TaskReranker
+from .temporal import parse_temporal_intent, classify_temporal_relationship
 
 class ContextBuilder:
     def __init__(
@@ -34,13 +35,31 @@ class ContextBuilder:
         task_text = request.task.strip()
         search_query = request.query.strip() if request.query else task_text
 
-        # 1. Whole-Workspace Semantic Discovery
+        # 0. Intent and Temporal Parameters
+        target_date = request.target_date
+        date_from = request.date_from
+        date_to = request.date_to
+        temporal_mode = request.temporal_mode or "none"
+
+        if temporal_mode == "none" and not target_date and not date_from and not date_to:
+            intent = parse_temporal_intent(search_query)
+            if intent["has_temporal_intent"] and intent["target_date"]:
+                target_date = intent["target_date"]
+                date_from = intent["date_from"]
+                date_to = intent["date_to"]
+                temporal_mode = intent["temporal_mode"]
+
+        # 1. Whole-Workspace Semantic Discovery with Temporal Gating
         search_req = SemanticSearchRequest(
             query=search_query,
-            limit=20,
+            limit=25,
             tag_filter=request.scope,
             hybrid=True,
-            alpha=settings.hybrid_alpha
+            alpha=settings.hybrid_alpha,
+            target_date=target_date,
+            date_from=date_from,
+            date_to=date_to,
+            temporal_mode=temporal_mode
         )
         search_resp = self.search_engine.search(search_req)
         
@@ -67,15 +86,19 @@ class ContextBuilder:
         # 3. Form Candidate Pool with Scores
         candidate_pool: List[Tuple[TanaNode, float, str]] = []
         for node, reason in expanded_pairs:
-            base_s = seed_scores.get(node.id, 0.40) # Default base score for graph neighbours
+            base_s = seed_scores.get(node.id, 0.40)
             candidate_pool.append((node, base_s, reason))
 
-        # 4. Multi-Factor Reranking & Deduplication
+        # 4. Multi-Factor Reranking & Deduplication with Temporal Anchoring
         max_nodes = request.max_nodes or settings.default_max_context_nodes
         ranked_candidates = self.reranker.rerank(
             task_query=task_text,
             candidates=candidate_pool,
-            max_nodes=max_nodes
+            max_nodes=max_nodes,
+            target_date=target_date,
+            date_from=date_from,
+            date_to=date_to,
+            temporal_mode=temporal_mode
         )
 
         # 5. Build Formatted Context Nodes & Markdown Packet
@@ -84,13 +107,19 @@ class ContextBuilder:
 
         md_sections.append(f"### 🌐 Tana Context Mask: Retrieved Knowledge Graph")
         md_sections.append(f"> **Task:** {task_text}")
+        if target_date:
+            md_sections.append(f"> **Target Date:** `{target_date}` | **Temporal Mode:** `{temporal_mode}`")
         md_sections.append(f"> **Trace ID:** `{trace_id}` | **Nodes Selected:** {len(ranked_candidates)} of {len(candidate_pool)} evaluated\n")
 
+        if search_resp.insufficient_evidence:
+            md_sections.append("> ⚠️ **Notice:** Insufficient contemporaneous evidence found in Tana for the requested historical period.\n")
+
+        # Group nodes by temporal classification if temporal intent active
+        target_year = target_date[:4] if target_date else None
+
         for idx, (node, score, reason) in enumerate(ranked_candidates, start=1):
-            # Resolve fields
             fields_dict = {f.field_name: (f.value_text or f.value_node_id) for f in node.fields}
             
-            # Resolve child snippets if requested
             child_snippets: List[str] = []
             if request.include_children and node.children:
                 child_nodes = self.db.get_children(node.id, limit=6)
@@ -101,6 +130,12 @@ class ContextBuilder:
                         child_snippets.append(f"{clean_cname}{done_mark}")
 
             tags_list = [t.tag_name for t in node.supertags]
+
+            rel_class = classify_temporal_relationship(
+                node=node,
+                target_date_str=target_date,
+                target_year=target_year
+            )
 
             ctx_node = ContextNode(
                 id=node.id,
@@ -114,7 +149,10 @@ class ContextBuilder:
                 backlinks=node.backlinks,
                 inclusion_reason=reason,
                 relevance_score=score,
-                deep_link=node.deep_link
+                deep_link=node.deep_link,
+                effective_date=node.effective_date,
+                date_source=node.date_source,
+                temporal_relationship=rel_class
             )
             context_nodes.append(ctx_node)
 
@@ -122,11 +160,22 @@ class ContextBuilder:
             tags_badge = " ".join([f"`#{t}`" for t in tags_list]) if tags_list else ""
             crumb_path = " › ".join(node.breadcrumbs) if node.breadcrumbs else "Workspace Root"
             
+            # Temporal badge
+            rel_badge = ""
+            if rel_class == "contemporaneous":
+                rel_badge = f" `[Contemporaneous · {node.effective_date or 'verified'}]`"
+            elif rel_class == "retrospective":
+                rel_badge = f" `[Retrospective · recorded {node.effective_date or 'later'}]`"
+            elif rel_class == "conflicting":
+                rel_badge = " `[Conflicting Date]`"
+
             md_item = []
-            md_item.append(f"#### {idx}. [{node.name}]({node.deep_link}) {tags_badge}")
+            md_item.append(f"#### {idx}. [{node.name}]({node.deep_link}) {tags_badge}{rel_badge}")
             md_item.append(f"- **Tana ID:** `tana:{node.id}` | **Relevance:** {score:.2f}")
             md_item.append(f"- **Path:** `{crumb_path}`")
             md_item.append(f"- **Why included:** {reason}")
+            if node.effective_date:
+                md_item.append(f"- **Calendar Provenance:** `{node.effective_date}` (source: `{node.date_source}`)")
             
             if node.description:
                 md_item.append(f"- **Description:** {node.description}")
@@ -171,5 +220,8 @@ class ContextBuilder:
             total_candidates_examined=len(candidate_pool),
             graph_expansion_count=len(expanded_pairs) - len(seed_nodes),
             latency_ms=total_latency_ms,
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
+            target_date=target_date,
+            temporal_mode=temporal_mode,
+            insufficient_evidence=search_resp.insufficient_evidence
         )
