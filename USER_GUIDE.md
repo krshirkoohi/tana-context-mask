@@ -80,15 +80,7 @@ This lets you query your Tana graph from ChatGPT on your phone or browser.
 1. Open [chatgpt.com/gpts/editor](https://chatgpt.com/gpts/editor) to create or edit a Custom GPT.
 2. In the **Configure** tab:
    - **Name:** Tana Knowledge Assistant
-   - **Instructions:** Paste the prompt below:
-     ```text
-     You are a personal knowledge assistant connected to the user's private Tana workspace.
-     
-     Operating Rules:
-     1. Always call the acquireContext action before answering questions about the user's notes, projects, meetings, tasks, or ideas.
-     2. When referencing retrieved information, cite the exact source note using its deep link: [Node Name](url).
-     3. Summarise information concisely and clearly distinguish between retrieved facts and your own synthesis.
-     ```
+   - **Instructions:** Copy and paste the comprehensive cognitive system prompt from [`SYSTEM_PROMPT.md`](SYSTEM_PROMPT.md). It equips the agent with complete GraphRAG retrieval heuristics, multi-facet discovery, calendar ancestry verification, and citation standards.
 3. Scroll down to **Actions** → click **Create new action**.
 4. Click **Import from URL** and enter:
    ```text
