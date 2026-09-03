@@ -72,22 +72,37 @@ app.post('/mc', async (c) => {
 });
 
 // OAuth 2.0 Discovery Endpoints (RFC 8414 & OpenID Connect)
-const oauthMetadata = {
-  issuer: 'https://tana-context-mask.krshirkoohi.workers.dev',
-  authorization_endpoint: 'https://tana-context-mask.krshirkoohi.workers.dev/oauth/authorize',
-  token_endpoint: 'https://tana-context-mask.krshirkoohi.workers.dev/oauth/token',
-  userinfo_endpoint: 'https://tana-context-mask.krshirkoohi.workers.dev/oauth/userinfo',
-  response_types_supported: ['code', 'token'],
-  grant_types_supported: ['authorization_code', 'client_credentials'],
-  token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
-  scopes_supported: ['read', 'write', 'mcp']
-};
-
-app.get('/.well-known/oauth-authorization-server', (c) => c.json(oauthMetadata));
-app.get('/.well-known/openid-configuration', (c) => c.json(oauthMetadata));
-app.get('/.well-known/oauth-authorization-server/mc', (c) => c.json(oauthMetadata));
-app.get('/.well-known/oauth-authorization-server/mcp', (c) => c.json(oauthMetadata));
-app.get('/.well-known/oauth-authorization-server/sse', (c) => c.json(oauthMetadata));
+app.get('/.well-known/oauth-authorization-server', (c) => {
+  const url = new URL(c.req.url);
+  const baseUrl = `${url.protocol}//${url.host}`;
+  return c.json({
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    userinfo_endpoint: `${baseUrl}/oauth/userinfo`,
+    response_types_supported: ['code', 'token'],
+    grant_types_supported: ['authorization_code', 'client_credentials'],
+    token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+    scopes_supported: ['read', 'write', 'mcp']
+  });
+});
+app.get('/.well-known/openid-configuration', (c) => {
+  const url = new URL(c.req.url);
+  const baseUrl = `${url.protocol}//${url.host}`;
+  return c.json({
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/oauth/authorize`,
+    token_endpoint: `${baseUrl}/oauth/token`,
+    userinfo_endpoint: `${baseUrl}/oauth/userinfo`,
+    response_types_supported: ['code', 'token'],
+    grant_types_supported: ['authorization_code', 'client_credentials'],
+    token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+    scopes_supported: ['read', 'write', 'mcp']
+  });
+});
+app.get('/.well-known/oauth-authorization-server/mc', (c) => c.redirect('/.well-known/oauth-authorization-server'));
+app.get('/.well-known/oauth-authorization-server/mcp', (c) => c.redirect('/.well-known/oauth-authorization-server'));
+app.get('/.well-known/oauth-authorization-server/sse', (c) => c.redirect('/.well-known/oauth-authorization-server'));
 
 // Instant Auto-Approve OAuth Authorisation Endpoint
 app.get('/oauth/authorize', (c) => {
@@ -112,14 +127,16 @@ app.post('/oauth/token', async (c) => {
 
 app.get('/oauth/userinfo', (c) => {
   return c.json({
-    sub: 'kavia',
-    name: 'Kavia',
-    email: 'krshirkoohi@gmail.com'
+    sub: 'user',
+    name: 'Tana User',
+    email: 'user@tana.inc'
   });
 });
 
 // OpenAI AI Plugin Manifest
 app.get('/.well-known/ai-plugin.json', (c) => {
+  const url = new URL(c.req.url);
+  const baseUrl = `${url.protocol}//${url.host}`;
   return c.json({
     schema_version: 'v1',
     name_for_human: 'Tana Context Mask',
@@ -131,17 +148,27 @@ app.get('/.well-known/ai-plugin.json', (c) => {
     },
     api: {
       type: 'openapi',
-      url: 'https://tana-context-mask.krshirkoohi.workers.dev/openapi.json'
+      url: `${baseUrl}/openapi.json`
     },
-    logo_url: 'https://tana-context-mask.krshirkoohi.workers.dev/logo.png',
-    contact_email: 'krshirkoohi@gmail.com',
-    legal_info_url: 'https://tana-context-mask.krshirkoohi.workers.dev'
+    logo_url: `${baseUrl}/logo.png`,
+    contact_email: 'support@tana.inc',
+    legal_info_url: baseUrl
   });
 });
 
 // OpenAPI Spec Endpoint
 app.get('/openapi.json', (c) => {
-  return c.json(openApiSpec);
+  const url = new URL(c.req.url);
+  const baseUrl = `${url.protocol}//${url.host}`;
+  return c.json({
+    ...openApiSpec,
+    servers: [
+      {
+        url: baseUrl,
+        description: 'Cloudflare Serverless Production'
+      }
+    ]
+  });
 });
 
 // Plugin Logo Endpoint

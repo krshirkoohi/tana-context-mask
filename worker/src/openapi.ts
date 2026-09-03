@@ -7,7 +7,7 @@ export const openApiSpec = {
   },
   "servers": [
     {
-      "url": "https://tana-context-mask.krshirkoohi.workers.dev",
+      "url": "https://<your-worker-subdomain>.workers.dev",
       "description": "Cloudflare Serverless Production"
     }
   ],

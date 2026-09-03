@@ -26,7 +26,7 @@ Tana Context Mask FastAPI Server (Local Mac)
 
 In your terminal:
 ```bash
-cd /Users/krshirkoohi/github/lab/tana-context-mask
+cd tana-context-mask
 python3 -m tana_context_mask.cli serve --port 8000
 ```
 
@@ -98,7 +98,7 @@ You are an intelligent knowledge assistant connected to the user's private Tana 
 
 1. At the bottom of the Configure tab, click **Create new action**.
 2. Set **Authentication** to `None` (or `API Key` / Custom Header `X-API-Key` if configured in `.env`).
-3. In the **Schema** box, paste the JSON schema from [`chatgpt_openapi.json`](file:///Users/krshirkoohi/github/lab/tana-context-mask/chatgpt_openapi.json), replacing `YOUR_HTTPS_TUNNEL_URL` in the `servers` block with your tunnel URL (e.g. `https://xxxx.trycloudflare.com` or `https://xxxx.a.pinggy.link`).
+3. In the **Schema** box, paste the JSON schema from [`chatgpt_openapi.json`](chatgpt_openapi.json), replacing `YOUR_HTTPS_TUNNEL_URL` in the `servers` block with your tunnel URL (e.g. `https://xxxx.trycloudflare.com` or `https://xxxx.a.pinggy.link`).
 
 ---
 

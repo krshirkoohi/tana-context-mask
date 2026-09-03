@@ -1,13 +1,13 @@
-# ⚡ Tana Context Mask (Cloudflare Serverless Worker)
+# Tana Context Mask (Cloudflare Serverless Worker)
 
-An always-on, zero-cost (£0/mo) serverless implementation of **Tana Context Mask** running directly on Cloudflare's global edge network.
+Serverless edge context acquisition and retrieval layer running directly on Cloudflare's global edge network.
 
 ---
 
-## 🏗️ Serverless Architecture
+## Serverless Architecture
 
 ```
-ChatGPT Actions (iOS / Web)
+AI Clients (ChatGPT / Claude / MCP / Agents)
         │
         ▼ (HTTPS)
 Cloudflare Worker (Hono Router)
@@ -20,7 +20,7 @@ Cloudflare Worker (Hono Router)
 
 ---
 
-## 🚀 100% Cloud-Native Deployment (No Mac / Computer Needed)
+## Deployment (Zero Local Compute Needed)
 
 ### 1. Create Cloudflare D1 Database & Vectorize Index
 ```bash
@@ -33,7 +33,7 @@ npx wrangler d1 create tana-db
 # Create Serverless Vector Index (384 dimensions for BGE-small-en-v1.5)
 npx wrangler vectorize create tana-nodes-index --dimensions=384 --metric=cosine
 ```
-*Note: Copy the `database_id` from the D1 output and paste it into `wrangler.jsonc`.*
+*Copy the `database_id` from the D1 output and set it in `wrangler.jsonc`.*
 
 ### 2. Initialize Remote D1 Database Schema
 ```bash
@@ -43,7 +43,7 @@ npm run db:init:remote
 ### 3. Add Your Tana API Token
 ```bash
 npx wrangler secret put TANA_API_TOKEN
-# Paste your Tana API Token when prompted
+# Paste your Tana Personal Access Token when prompted
 ```
 
 ### 4. Deploy to Cloudflare Edge
@@ -54,25 +54,17 @@ npm run deploy
 
 ---
 
-## ⚡ Autonomous 100% Cloud Ingestion & Sync
+## Autonomous Cloud Ingestion & Sync
 
-Once deployed, you never have to touch a computer again:
-1. **Autonomous Full Workspace Ingestion:** The Cloudflare Worker will automatically connect directly to Tana Cloud over HTTPS, paginate through your entire workspace in chunks of 250 nodes, generate embeddings using Cloudflare's edge GPUs (Workers AI), and store them into D1 + Vectorize.
+1. **Full Workspace Ingestion:** The Cloudflare Worker connects directly to Tana Cloud over HTTPS, paginates through your workspace in chunks of 250 nodes, generates embeddings using Cloudflare's edge GPUs (Workers AI), and stores them into D1 + Vectorize.
 2. **Continuous 15-Minute Sync:** The Cloudflare Cron trigger automatically runs every 15 minutes in the cloud to pull newly created or modified notes from Tana.
-3. **Check Cloud Status Anytime:** Visit `https://tana-context-mask.<your-subdomain>.workers.dev/api/v1/sync/status` in any mobile browser to see live ingestion progress and node counts.
+3. **Telemetry & Telemetry Endpoint:** Visit `https://<your-worker-subdomain>.workers.dev/api/v1/sync/status` to inspect live ingestion progress and node counts.
 
 ---
 
-## 🤖 ChatGPT Custom Action Setup
+## Client Integration
 
-1. Open your Custom GPT at [chatgpt.com/gpts/editor](https://chatgpt.com/gpts/editor).
-2. Under **Actions**, set the server URL in your OpenAPI schema to your Cloudflare Worker URL:
-   ```json
-   "servers": [
-     {
-       "url": "https://tana-context-mask.<your-subdomain>.workers.dev",
-       "description": "Cloudflare Serverless Production"
-     }
-   ]
-   ```
-3. Talk to ChatGPT on your iPhone, iPad, or browser — all context retrieval runs 100% cloud-to-cloud with zero local dependencies.
+1. In your AI client (e.g., ChatGPT Custom GPT, LibreChat, or Claude MCP), point the configuration to your worker:
+   - **OpenAPI Schema:** `https://<your-worker-subdomain>.workers.dev/openapi.json`
+   - **MCP Stream:** `https://<your-worker-subdomain>.workers.dev/sse`
+2. All context retrieval runs cloud-to-cloud with zero local dependencies.
