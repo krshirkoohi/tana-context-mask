@@ -140,24 +140,28 @@ tana-context-mask context "What are my active goals and projects?"
 
 ---
 
-### Option 2: Deploy Your Own 24/7 Cloudflare Worker
+### Option 2: ⚡ One-Click 24/7 Cloudflare Edge Deployment (No Mac Needed)
+
+Anyone can deploy their own isolated, 24/7 online semantic engine using the automated provisioning script:
 
 ```bash
-cd worker
-npm install
+# Clone the repository
+git clone https://github.com/krshirkoohi/tana-context-mask.git
+cd tana-context-mask
 
-# 1. Create your remote Cloudflare D1 Database and Vectorize Index
-npx wrangler d1 create tana-db
-npx wrangler vectorize create tana-nodes-index --dimensions=384 --metric=cosine
-
-# 2. Update wrangler.jsonc with your database_id and index_name
-
-# 3. Store your encrypted Tana Pro PAT secret in Cloudflare
-npx wrangler secret put TANA_API_TOKEN
-
-# 4. Deploy to Cloudflare Serverless Edge
-npx wrangler deploy
+# Run automated deployment
+./deploy.sh
 ```
+
+**What `./deploy.sh` does automatically:**
+1. Authenticates your Cloudflare CLI (`wrangler`).
+2. Creates your serverless **D1 SQLite Database** (`tana-db`) and executes the graph schema.
+3. Provisions your **Vectorize Index** (`tana-nodes-index`) with 384 dimensions matching `@cf/baai/bge-small-en-v1.5`.
+4. Securely encrypts and stores your `TANA_API_TOKEN`.
+5. Deploys the Hono TypeScript Worker to Cloudflare's global edge network.
+
+*Once deployed, the Cloudflare Cron Trigger autonomously synchronizes your Tana graph every 15 minutes in the cloud. Your local computer can be switched off completely.*
+
 
 ---
 
