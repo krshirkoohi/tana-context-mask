@@ -1,8 +1,16 @@
-# Tana Context Mask (Universal Semantic Engine)
+# Tana Semantic Engine
 
-> A provider-agnostic, graph-aware semantic context acquisition engine connecting [Tana Outliner](https://tana.inc) to modern AI assistants, agents, and IDEs.
+> A layer of intelligence that sits above your Tana workspace. It helps your AI understand your work more like you do: not just as isolated notes, but as ideas, objects, and relationships that form a bigger picture.
 
-`tana-context-mask` acts as a unified retrieval gateway between your Tana knowledge graph and modern AI platforms. Instead of rigid keyword queries or manual copy-pasting, it performs dense vector discovery, subgraph expansion around candidate nodes, multi-factor reranking, and serves a structured, sourced context packet to any LLM.
+---
+
+## How It Works
+
+- **Search by Meaning, Not Just Keywords:** When you ask about something in your workspace, the Semantic Engine uses vector embeddings to search by meaning rather than relying only on exact keywords or manually constructed search queries. Notes, projects, tasks, people, decisions, books, movies, and anything else you've captured become part of that semantic memory.
+- **Semantic Retrieval Meets Structural Precision:** But semantic search is only one half of the picture. Connect ChatGPT (or any AI client) to both the **Tana Semantic Engine** and the **Tana Outliner**, and semantic retrieval works alongside Tana’s native graph. The Semantic Engine finds potentially relevant information by meaning, while Tana Outliner provides the structure around it: supertags, fields, references, hierarchy, and relationships.
+- **Lightweight GraphRAG for Tana:** Together, they form a lightweight GraphRAG system for Tana. Semantic search finds the right neighbourhood of information. Graph traversal establishes what those things are and how they connect. ChatGPT brings both together to understand the bigger picture.
+- **No Friction or Forced Categorisation:** The goal isn’t to meticulously categorise every thought you’ve ever written. Your existing notes remain useful as semantic memory, while Tana’s structured objects add precision where structure actually earns its keep.
+- **Natural Interaction:** No complex search nodes. No need to remember exactly where something lives or how you worded it. Ask naturally, and let the system find the context.
 
 ---
 

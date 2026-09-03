@@ -1,8 +1,10 @@
-# Getting Started: The Complete Beginner's Guide
+# Getting Started: Tana Semantic Engine Guide
 
-This guide walks you through connecting your Tana workspace to ChatGPT, Claude, or any AI assistant. 
+This guide walks you through connecting your Tana workspace to ChatGPT, Claude, or any AI assistant using the **Tana Semantic Engine**.
 
-Once deployed, the system runs 24/7 in Cloudflare's serverless edge cloud. You do not need to keep your computer running.
+The Tana Semantic Engine is a layer of intelligence that sits above your Tana workspace. Combined with Tana Outliner, it forms a lightweight GraphRAG system: semantic search finds the right neighbourhood of information by meaning, while Tana Outliner provides structural context (supertags, fields, references, hierarchy, and relationships).
+
+Once deployed, the engine runs 24/7 in Cloudflare's serverless edge cloud. Your local computer does not need to stay on.
 
 ---
 
