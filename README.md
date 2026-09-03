@@ -50,6 +50,8 @@ Choose the deployment model that best matches your workflow:
 
 ## Quickstart
 
+> For a complete, step-by-step walkthrough covering prerequisites, accounts, and AI client configuration, see the [Beginner's Setup Guide](USER_GUIDE.md).
+
 ### Option 1: Automated Serverless Edge (Recommended)
 
 Deploy to Cloudflare's global edge network in under 5 minutes. Operates 24/7 online with zero local machine compute required:
