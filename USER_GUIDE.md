@@ -8,15 +8,16 @@ Once deployed, the system runs 24/7 in Cloudflare's serverless edge cloud. You d
 
 ## What You Need Before You Start
 
-1. **Tana Account with API Access:**
-   - A Tana account with access to the hosted MCP endpoint (`https://app.tana.inc/mcp`).
-   - Personal Access Token (PAT): In Tana, go to **Settings → API Tokens** and click **Create Token**. Copy this token.
+1. **Tana Account (Core, Plus, or Pro) with API Access:**
+   - **Tana Plus or Pro** (or early Core with API access enabled) provides access to Tana's remote API.
+   - **Personal Access Token (PAT):** In Tana, go to **Settings → API Tokens** and generate a token.
+   - *Note on the Outliner MCP:* The Cloudflare Worker connects directly to Tana's cloud endpoint (`https://app.tana.inc/mcp`) using your token. You do **not** need to install or run the Tana Outliner desktop MCP locally for the Cloudflare sync to work—the cloud worker talks directly to Tana's hosted MCP.
 2. **Free Cloudflare Account:**
-   - Sign up for a free account at [cloudflare.com](https://cloudflare.com) if you do not already have one.
-   - Cloudflare Workers, Vectorize, and D1 all run entirely within their free tier for personal workspaces.
+   - Sign up at [cloudflare.com](https://cloudflare.com).
+   - Workers, Vectorize, and D1 all run within the free tier for typical personal knowledge graphs.
 3. **AI Client Account:**
-   - **ChatGPT Plus / Team / Enterprise:** If you want to use it as a Custom GPT Action (works on iOS, Android, and web).
-   - **Claude Desktop / Cursor / Cline:** If you want to use it via the Model Context Protocol (MCP).
+   - **ChatGPT Plus / Team / Enterprise:** For Custom GPT Actions on mobile and web.
+   - **Claude Desktop / Cursor / Cline:** For Model Context Protocol (MCP) tool calling.
 
 ---
 
@@ -122,11 +123,21 @@ If you use Claude Desktop, Cursor, or an MCP-compatible IDE:
 
 ## Frequently Asked Questions
 
+### Does this work with Tana Plus?
+Yes. Any Tana tier (Core, Plus, or Pro) that allows you to generate a Personal Access Token in **Settings → API Tokens** works with this engine.
+
 ### Do I need to keep my computer turned on?
 No. The backend worker, vector database, and periodic synchronization all run on Cloudflare's serverless infrastructure.
 
 ### How much does this cost?
 Nothing for personal use. Cloudflare's free tier provides 100,000 Worker requests per day, 50,000 Vectorize vector queries per month, and free SQLite storage on D1, which easily covers typical personal knowledge graphs.
+
+### Do I need to run the Tana Outliner desktop MCP server?
+No. The Cloudflare Worker connects directly to Tana's cloud-hosted MCP (`https://app.tana.inc/mcp`) using your API token. You do not need to run any local desktop bridge or Python process.
+
+### What is the difference between the Tana Outliner MCP and this Semantic Embedding MCP?
+- **Tana Outliner MCP:** Tana's native interface for reading and writing raw nodes by ID or exact keyword match.
+- **Tana Context Mask MCP:** This semantic layer. It indexes your notes into dense vector embeddings, performs conceptual search (finding notes even when keywords don't match), expands the graph around candidate seeds, and packages a compact, cited context packet for your AI assistant.
 
 ### Is my data private?
 Yes. Your data stays between your Tana account and your own Cloudflare account. It never touches any third-party intermediate servers.
