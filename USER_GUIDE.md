@@ -115,6 +115,26 @@ If you use Claude Desktop, Cursor, or an MCP-compatible IDE:
 
 ---
 
+## Workspace Usage Tip: Keep It Flat by Default
+
+For the Semantic Engine to work cleanly with Tana's graph model, avoid creating deep outline hierarchies unless the parent-child relationship carries real structural meaning.
+
+**Default to flat. Nest only when the parent-child relationship represents genuine containment or dependency.**
+
+Use indentation mainly for things such as:
+- tasks that genuinely belong to a project
+- sections inside a long document
+- components that are meaningful children of a specific object
+- information whose local sequence or context would become unclear if flattened
+
+For looser associations between notes, ideas, people, resources, observations, or concepts, prefer Tana's semantic structure instead: supertags, fields, references, backlinks, and search.
+
+In short: **use hierarchy for containment, not association**. This keeps the workspace easier to navigate and gives the Semantic Engine cleaner graph structure to retrieve and expand around.
+
+Source note in Tana: [Using Tana](https://app.tana.inc/?nodeid=GkIX9ji8s9X2)
+
+---
+
 ## Frequently Asked Questions
 
 ### Does this work with Tana Plus?
