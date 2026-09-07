@@ -41,7 +41,10 @@ Watch how Tana Context Mask powers grounded reasoning and native deep-linking on
   <tr>
     <td width="50%" align="center" valign="top">
       <h4>Case 1: Complex Synthesis & Native Mobile Deep-Linking</h4>
-      <video src="assets/demo_agent_learning_synthesis.mp4" controls="controls" width="100%" poster="assets/demo_agent_learning_synthesis_poster.jpg"></video>
+      <a href="assets/demo_agent_learning_synthesis.mp4">
+        <img src="assets/demo_agent_learning_synthesis.gif" alt="Case 1 Demo" width="100%">
+      </a>
+      <p align="center"><a href="assets/demo_agent_learning_synthesis.mp4">▶ <strong>Watch Full Video (1m 06s)</strong></a></p>
       <p align="left">
         <strong>Prompt:</strong> <em>"Things I have learned about AI agents"</em><br>
         <strong>GraphRAG Behaviour:</strong> The engine retrieves candidate lessons across projects (e.g. <em>Building a Drift Detector</em>), separates retrieval from reasoning, and formats clean citations. Tapping a citation in ChatGPT deep-links directly into the native <strong>Tana iOS App</strong> to the exact note.
@@ -49,7 +52,10 @@ Watch how Tana Context Mask powers grounded reasoning and native deep-linking on
     </td>
     <td width="50%" align="center" valign="top">
       <h4>Case 2: Evidence Separation & Deep Outliner Traversal</h4>
-      <video src="assets/demo_recipes_evidence_separation.mp4" controls="controls" width="100%" poster="assets/demo_recipes_evidence_separation_poster.jpg"></video>
+      <a href="assets/demo_recipes_evidence_separation.mp4">
+        <img src="assets/demo_recipes_evidence_separation.gif" alt="Case 2 Demo" width="100%">
+      </a>
+      <p align="center"><a href="assets/demo_recipes_evidence_separation.mp4">▶ <strong>Watch Full Video (1m 12s)</strong></a></p>
       <p align="left">
         <strong>Prompt:</strong> <em>"Meals & Recipes Cooked vs Planned"</em><br>
         <strong>GraphRAG Behaviour:</strong> Executes multi-step outliner inspections (depth 3–5). It separates <em>confirmed cooked/eaten meals</em> from <em>unconfirmed saved ideas</em>, identifies qualitative feeling ("made you feel good" vs "too heavy"), and highlights the strongest candidate.

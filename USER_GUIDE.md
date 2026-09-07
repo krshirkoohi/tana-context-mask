@@ -89,13 +89,21 @@ Once deployed, your Cloudflare Worker synchronises your Tana notes automatically
 Here are two live screen recordings showing Tana Context Mask powering ChatGPT on mobile:
 
 ### Case 1: Knowledge Synthesis & Direct Mobile Deep-Linking
-<video src="assets/demo_agent_learning_synthesis.mp4" controls="controls" width="100%" poster="assets/demo_agent_learning_synthesis_poster.jpg"></video>
+<a href="assets/demo_agent_learning_synthesis.mp4">
+  <img src="assets/demo_agent_learning_synthesis.gif" alt="Case 1 Demo" width="360">
+</a>
+
+<p><a href="assets/demo_agent_learning_synthesis.mp4">▶ <strong>Watch Full Video (1m 06s MP4)</strong></a></p>
 
 * **Prompt:** *"Things I have learned about AI agents"*
 * **What happens:** The agent queries the workspace via the semantic layer, extracts recurring themes (context engineering, retrieval vs reasoning, drift detection), and formats clean citations. Tapping a citation in ChatGPT immediately opens the **native Tana iOS App** to the exact node.
 
 ### Case 2: Deep Outliner Traversal & Evidence Classification
-<video src="assets/demo_recipes_evidence_separation.mp4" controls="controls" width="100%" poster="assets/demo_recipes_evidence_separation_poster.jpg"></video>
+<a href="assets/demo_recipes_evidence_separation.mp4">
+  <img src="assets/demo_recipes_evidence_separation.gif" alt="Case 2 Demo" width="360">
+</a>
+
+<p><a href="assets/demo_recipes_evidence_separation.mp4">▶ <strong>Watch Full Video (1m 12s MP4)</strong></a></p>
 
 * **Prompt:** *"Meals & Recipes Cooked vs Planned"*
 * **What happens:** The agent inspects outliner trees at depths 3–5, separates meals that were *actually confirmed cooked* from unmade recipe ideas, recalls qualitative notes from daily journal nodes ("made you feel good" vs "too heavy"), and highlights the strongest candidate.
