@@ -33,6 +33,33 @@ The finished product is not just a deployable semantic embedding mirror of your 
 
 ---
 
+## See It in Action (Mobile GraphRAG in Real Use)
+
+Watch how Tana Context Mask powers grounded reasoning and native deep-linking on mobile:
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <h4>Case 1: Complex Synthesis & Native Mobile Deep-Linking</h4>
+      <video src="assets/demo_agent_learning_synthesis.mp4" controls="controls" width="100%" poster="assets/demo_agent_learning_synthesis_poster.jpg"></video>
+      <p align="left">
+        <strong>Prompt:</strong> <em>"Things I have learned about AI agents"</em><br>
+        <strong>GraphRAG Behaviour:</strong> The engine retrieves candidate lessons across projects (e.g. <em>Building a Drift Detector</em>), separates retrieval from reasoning, and formats clean citations. Tapping a citation in ChatGPT deep-links directly into the native <strong>Tana iOS App</strong> to the exact note.
+      </p>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <h4>Case 2: Evidence Separation & Deep Outliner Traversal</h4>
+      <video src="assets/demo_recipes_evidence_separation.mp4" controls="controls" width="100%" poster="assets/demo_recipes_evidence_separation_poster.jpg"></video>
+      <p align="left">
+        <strong>Prompt:</strong> <em>"Meals & Recipes Cooked vs Planned"</em><br>
+        <strong>GraphRAG Behaviour:</strong> Executes multi-step outliner inspections (depth 3–5). It separates <em>confirmed cooked/eaten meals</em> from <em>unconfirmed saved ideas</em>, identifies qualitative feeling ("made you feel good" vs "too heavy"), and highlights the strongest candidate.
+      </p>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Supported AI Interfaces
 
 Built to interface cleanly with major AI ecosystems:

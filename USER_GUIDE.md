@@ -84,6 +84,24 @@ Once deployed, your Cloudflare Worker synchronises your Tana notes automatically
 
 ---
 
+## 📱 Real-World Demos: What It Looks Like in Practice
+
+Here are two live screen recordings showing Tana Context Mask powering ChatGPT on mobile:
+
+### Case 1: Knowledge Synthesis & Direct Mobile Deep-Linking
+<video src="assets/demo_agent_learning_synthesis.mp4" controls="controls" width="100%" poster="assets/demo_agent_learning_synthesis_poster.jpg"></video>
+
+* **Prompt:** *"Things I have learned about AI agents"*
+* **What happens:** The agent queries the workspace via the semantic layer, extracts recurring themes (context engineering, retrieval vs reasoning, drift detection), and formats clean citations. Tapping a citation in ChatGPT immediately opens the **native Tana iOS App** to the exact node.
+
+### Case 2: Deep Outliner Traversal & Evidence Classification
+<video src="assets/demo_recipes_evidence_separation.mp4" controls="controls" width="100%" poster="assets/demo_recipes_evidence_separation_poster.jpg"></video>
+
+* **Prompt:** *"Meals & Recipes Cooked vs Planned"*
+* **What happens:** The agent inspects outliner trees at depths 3–5, separates meals that were *actually confirmed cooked* from unmade recipe ideas, recalls qualitative notes from daily journal nodes ("made you feel good" vs "too heavy"), and highlights the strongest candidate.
+
+---
+
 ## ⚠️ Honest Limitations: The Free User Reality Check
 
 Most people setting this up will be running on free or lower-tier accounts. Here is exactly what to expect and where you will hit hard platform limits:
