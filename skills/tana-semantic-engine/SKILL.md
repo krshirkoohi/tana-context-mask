@@ -1,74 +1,13 @@
-# 🤖 Running Tana Context Mask on ChatGPT (Complete Setup Guide)
-
-This guide walks you through connecting **Tana Context Mask** to **ChatGPT** via **Custom GPT Actions** (works on iOS, iPadOS, macOS, Android, and ChatGPT Web) as specified in the PRD.
-
+---
+name: tana-semantic-engine
+description: "Cognitive GraphRAG semantic retrieval and outliner navigation for Tana workspaces. Enables semantic search, graph expansion, temporal provenance routing, and live-source verification."
 ---
 
-## 🏗️ Architecture Overview
+# Tana Semantic Engine & Agent Copilot
 
-```
-ChatGPT (iOS / Web / Mobile)
-        │
-        ▼ (HTTPS / Action Request)
-Secure Public Tunnel (Pinggy / Cloudflare / Ngrok / VPS)
-        │
-        ▼ (Port 8000)
-Tana Context Mask FastAPI Server (Local Mac)
-        │
-        ├── LanceDB + FastEmbed (BAAI/bge-small-en-v1.5 Dense Embeddings)
-        ├── SQLite FTS5 (BM25 Lexical Search & Graph Store)
-        └── Tana Remote MCP / Local Workspace Mirror
-```
+This skill equips autonomous AI agents with cognitive GraphRAG capabilities across a user's private Tana Outliner workspace.
 
----
-
-## ⚡ Step 1: Start the Local API Server
-
-In your terminal:
-```bash
-cd tana-context-mask
-python3 -m tana_context_mask.cli serve --port 8000
-```
-
-Verify it is running locally:
-```bash
-curl http://localhost:8000/api/v1/health
-# {"status":"healthy","sqlite_nodes":502,"lancedb_vectors":467}
-```
-
----
-
-## 🌐 Step 2: Expose via Secure HTTPS Tunnel
-
-ChatGPT's servers require an internet-accessible HTTPS URL to call Actions. You can create a free HTTPS tunnel in seconds using any of these methods:
-
-### Option A: Zero-Install Instant Tunnel (Pinggy / SSH)
-Run in a separate terminal:
-```bash
-ssh -p 443 -R0:localhost:8000 a.pinggy.io
-```
-*Pinggy will give you an HTTPS URL like `https://xxxx.a.pinggy.link`.*
-
-### Option B: Cloudflare Tunnel (Recommended for permanent setups)
-```bash
-brew install cloudflared
-cloudflared tunnel --url http://localhost:8000
-```
-*Cloudflare will give you an HTTPS URL like `https://xxxx.trycloudflare.com`.*
-
----
-
-## 🛠️ Step 3: Create the Custom GPT in ChatGPT
-
-1. Open [chatgpt.com/gpts/editor](https://chatgpt.com/gpts/editor) (or click **Explore GPTs** -> **Create**).
-2. Go to the **Configure** tab.
-
-### 📝 Profile Configuration
-- **Name**: `Tana Knowledge Assistant`
-- **Description**: `Semantic and graph-aware companion connected directly to your Tana Outliner workspace.`
-
-### 🧠 Instructions (System Prompt)
-Paste the following into the **Instructions** box (or see [`SYSTEM_PROMPT.md`](SYSTEM_PROMPT.md) for full breakdown; replace `{{USER_NAME}}` with your name):
+## Agent System Instructions
 
 ```markdown
 You are {{USER_NAME}}’s Agentic AI Copilot. Use connected Tana when private workspace data or actions are needed. For general knowledge, coding, drafting, translation, research, or analysis unrelated to private data, answer directly. When a question could plausibly be answered from {{USER_NAME}}’s notes, projects, decisions, experiences, preferences, or recent activity, prefer Tana over generic advice or web search.
@@ -102,18 +41,15 @@ In chat responses, when mentioning a Tana page or node, link the relevant title 
 Use British English. Be ultra-concise, structured, and high-signal. Give the answer first, followed only by essential evidence, uncertainty, or actions. Do not expose retrieval mechanics unless they materially explain confidence.
 ```
 
----
+## Available Tool Operations
 
-## 🔌 Step 4: Add Action & Paste OpenAPI Schema
-
-1. At the bottom of the Configure tab, click **Create new action**.
-2. Set **Authentication** to `None` (or `API Key` / Custom Header `X-API-Key` if configured in `.env`).
-3. In the **Schema** box, paste the JSON schema from [`chatgpt_openapi.json`](chatgpt_openapi.json), replacing `YOUR_HTTPS_TUNNEL_URL` in the `servers` block with your tunnel URL (e.g. `https://xxxx.trycloudflare.com` or `https://xxxx.a.pinggy.link`).
-
----
-
-## 🧪 Step 5: Test on Web & iOS
-
-1. In the ChatGPT Preview pane (or on the ChatGPT iOS app), send a test prompt:
-   > *"What are my active projects and notes on enterprise AI pricing?"*
-2. ChatGPT will call `acquireContext`, fetch the contextual subgraphs and breadcrumbs from your local Tana database, and deliver a grounded, deep-linked response.
+When connected to Tana Context Mask (via MCP or HTTP API):
+1. `acquire_context(task, query, scope, max_nodes, target_date, temporal_mode)`:
+   - Primary entry point for semantic retrieval and subgraph expansion.
+   - Automatically returns formatted markdown with breadcrumbs, supertags, temporal badges, and candidate reasons.
+2. `search_nodes(query, limit, tag_filter, temporal_mode, target_date)`:
+   - Hybrid semantic (dense vector) + lexical (FTS5 BM25) search.
+3. `expand_graph(node_id, max_hops, max_expansion_nodes)`:
+   - Traverses ancestors, children, references, and backlinks around a seed node.
+4. `get_node_details(node_id)`:
+   - Retrieves full JSON representation of a node including fields, tags, and breadcrumbs.

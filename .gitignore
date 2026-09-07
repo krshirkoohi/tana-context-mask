@@ -7,3 +7,10 @@ data/
 dist/
 build/
 .env
+.env.local
+
+# Local Agent & Workspace Configs
+.agents/
+.DS_Store
+.vscode/
+.idea/

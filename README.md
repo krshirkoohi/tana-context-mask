@@ -12,6 +12,25 @@
 - **No Friction or Forced Categorisation:** The goal isn’t to meticulously categorise every thought you’ve ever written. Your existing notes remain useful as semantic memory, while Tana’s structured objects add precision where structure actually earns its keep.
 - **Natural Interaction:** No complex search nodes. No need to remember exactly where something lives or how you worded it. Ask naturally, and let the system find the context.
 
+<p align="center">
+  <img src="assets/semantic-retrieval-graphrag.png" alt="Semantic Retrieval + Structural Precision = Understanding" width="850">
+</p>
+
+### The Dual Role: Semantic Map & Inference Ranking Engine
+
+The finished product is not just a deployable semantic embedding mirror of your workspace—it is an **active inference search engine** designed to ground LLM reasoning:
+
+1. **Multi-Facet Candidate Discovery:** Instead of relying on a single query paraphrase, the engine retrieves candidate seeds across orthogonal facets (actions, causes, outcomes, people, events, likely titles, and decisions), blending dense vector search (`bge-small-en-v1.5`) with lexical BM25 (`fts5`).
+2. **Structural Subgraph Expansion:** Candidates are treated as seeds, expanding up to parents, down to child checklists, and across bidirectional references (`[[reference]]`) and supertag schemas (`#person`, `#meeting`, `#project`).
+3. **Multi-Factor Reranking & Evidence Hierarchy:**
+   - **Relevance:** Dense semantic similarity combined with exact title and field lexical matching.
+   - **Authority & Centrality:** Cluster density and structural importance of core supertags.
+   - **Temporal Provenance Routing:** Calendar ancestry (`Daily notes → Year → Week → Day → note`) serves as primary chronological truth over isolated date fields.
+   - **Evidence Strength:** Ranks evidence hierarchically:
+     $$\text{direct contemporaneous} > \text{later direct recollection} > \text{structured synthesis} > \text{AI-generated interpretation}$$
+     $$\text{direct evidence} > \text{repeated evidence} > \text{contextual inference} > \text{stated intention} > \text{speculation} > \text{generic mention}$$
+   - **Live Source Freshness:** Excludes deleted/inTrash items and verifies canonical day nodes before asserting negative claims (*never infer "nothing due" from an empty search*).
+
 ---
 
 ## Supported AI Interfaces
@@ -142,7 +161,7 @@ Add the server endpoint to your MCP configuration:
 
 The retrieval engine (dense/sparse hybrid search + multi-hop ancestry + schema density + key-value property weighting) is fundamentally source-agnostic:
 
-- **Universal Entity & Property Schema:** Any structured second brain (Notion databases, filesystem Markdown frontmatter, GitHub DAG issues, Obsidian vaults) maps directly into our graph schema `(id, name, parent_id, fields, edges)`.
+- **Universal Entity & Property Schema:** Any structured outliner or knowledge graph (hierarchical nodes, tags, fields, references) maps directly into our graph schema `(id, name, parent_id, fields, edges)`.
 - **Configurable Property Weights:** JSON key-value properties can be weighted dynamically so high-signal attributes (`Status`, `Tags`, `Priority`, `Assignees`, `Dates`) automatically drive reranking priority.
 - **MCP Portability:** By attaching standard Model Context Protocol (MCP) ingestion adapters, the engine can index and retrieve across any MCP-compliant tool without altering the core Cloudflare Edge Graph-RAG pipeline.
 

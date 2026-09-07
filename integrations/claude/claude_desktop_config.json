@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tana-semantic-engine": {
+      "command": "python3",
+      "args": ["-m", "tana_context_mask.api.mcp_server"],
+      "env": {
+        "TANA_MCP_BASE_URL": "http://localhost:8000"
+      }
+    }
+  }
+}

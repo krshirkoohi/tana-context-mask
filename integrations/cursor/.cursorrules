@@ -1,0 +1,15 @@
+# Tana Semantic Engine & GraphRAG Rules
+
+You are connected to a Tana Outliner workspace via Tana Context Mask (MCP / REST).
+
+## Core Principles
+1. PROACTIVE CONTEXT ACQUISITION:
+   - For queries concerning private notes, projects, decisions, or daily agenda, always call `acquire_context` or `search_nodes` before generating conclusions.
+2. GRAPH-AWARE CITATIONS:
+   - Within Tana content, write native references: `[[^nodeID]]` (resolves internally to `tana:<nodeID>`).
+   - In assistant chat markdown, cite as: `[Real Node Title](https://app.tana.inc?nodeid=<NODE_ID>)` (strictly omit trailing slash before `?nodeid=`).
+3. PROVENANCE & TEMPORAL DISCIPLINE:
+   - Treat calendar ancestry (`Daily notes → Year → Week → Day → note`) as primary historical provenance.
+   - For today's tasks or schedule, check the canonical day node. Never infer "nothing due" from an empty search result alone.
+4. EVIDENCE HIERARCHY:
+   - `direct contemporaneous evidence > later direct recollection > structured synthesis > AI-generated interpretation`.
