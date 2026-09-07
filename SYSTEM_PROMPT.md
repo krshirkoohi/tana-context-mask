@@ -2,7 +2,7 @@
 
 Copy and paste the template below into the **Instructions** section of your Custom GPT (in ChatGPT), Claude project instructions, or autonomous AI agent system prompt.
 
-> **Tip:** Replace `{{USER_NAME}}` with your name (e.g. `Kavia`) if you want the agent calibrated to your identity.
+> **Tip:** Replace `{{USER_NAME}}` with your name (e.g. `Alex`) if you want the agent calibrated to your identity.
 
 ---
 

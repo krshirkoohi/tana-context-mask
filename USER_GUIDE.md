@@ -84,23 +84,30 @@ Once deployed, your Cloudflare Worker synchronises your Tana notes automatically
 
 ---
 
-## ⚠️ Honest Limitations & What to Expect
+## ⚠️ Honest Limitations: The Free User Reality Check
 
-1. **Initial Indexing Lag (Cold-Start):**
-   * Tana’s API enforces per-minute rate limits to protect workspace stability.
-   * If you have a large workspace (3,000–10,000+ nodes), the initial ingestion pass takes **15–30 minutes** to index all historical nodes and generate embeddings.
-   * *Tip:* Don't worry if queries return partial results in the first few minutes; let the background sync complete its initial pass.
-2. **Cloudflare Free Tier Quotas:**
-   * **Workers AI:** 10,000 neuron executions/day free.
-   * **Vectorize:** 5,000,000 vector dimensions queried/month free.
-   * **D1 SQLite:** 5 GB storage free.
-   * *Honest reality:* For personal use (querying your notes 50–100 times a day), this free tier is virtually impossible to exhaust. It costs £0/$0 per month.
-3. **24/7 Mobile Availability vs Local Python Setup:**
-   * If you choose the local Python setup (`python -m tana_context_mask.cli serve`), closing your laptop lid disconnects your tunnel, breaking ChatGPT on your phone.
-   * The Cloudflare Edge setup runs 24/7 without needing your laptop powered on.
-4. **100% Data Privacy (Zero Middlemen):**
-   * You are deploying to your *own* free Cloudflare account.
-   * Your Tana notes and API tokens never touch any third-party server or shared database.
+Most people setting this up will be running on free or lower-tier accounts. Here is exactly what to expect and where you will hit hard platform limits:
+
+### 1. Cloudflare Free Tier Limitations ($0/Month)
+Cloudflare's free tier requires no credit card and never expires, but has daily rate limits:
+* **Initial Embedding Cap (Workers AI):** 10,000 neuron executions per day.
+  - If your Tana workspace has **under 10,000 nodes**, your entire workspace will be indexed on day one.
+  - If you have **over 10,000 nodes**, the background worker will index the first 10,000 nodes, pause when it hits the daily limit, and automatically resume the following day until the backfill is complete.
+* **Monthly Vector Search Cap (Vectorize):** 5,000,000 queried vector dimensions per month.
+  - Because we use compact 384-dimensional embeddings (`bge-small-en-v1.5`), this allows roughly **13,000 search queries per month** (~430 queries every day). This is more than enough for individual use.
+* **Storage Cap (D1 Database):** 5 GB of SQLite storage. A typical 20,000-node graph takes less than 150 MB.
+
+### 2. ChatGPT Free Tier Limitation
+* **Custom GPT Actions require ChatGPT Plus or Team:** OpenAI restricts the ability to create Custom GPTs and attach private OpenAPI Actions to paid accounts ($20/mo). If you only have a free ChatGPT account, you cannot access the GPT Editor to add the action.
+* **The 100% Free Alternative:** If you do not have ChatGPT Plus, connect the Cloudflare Worker to **Claude Desktop** (which supports Model Context Protocol 100% free with no subscription) or open-source frontends like **Cursor**, **LibreChat**, or **OpenWebUI**.
+
+### 3. Tana Free (Core Plan) Limitation
+* **API Access requires Tana Plus ($14/mo):** Tana does not provide API tokens on the free "Core" tier. To generate a Personal Access Token in **Settings → API Tokens**, an active Tana Plus subscription is required. Tana Pro is *not* required.
+
+### 4. Initial Cold-Start Indexing Lag
+* Tana's cloud API enforces per-minute rate limits to maintain system stability.
+* When first deployed, syncing 3,000–8,000 nodes takes approximately **15–30 minutes** in the background. Queries made immediately after deployment will only search the nodes indexed so far.
+* Check `https://<your-subdomain>.workers.dev/api/v1/sync/status` to monitor indexing progress.
 
 ---
 

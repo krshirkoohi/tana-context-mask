@@ -151,9 +151,10 @@ Add the server endpoint to your MCP configuration:
 
 ---
 
-## Prerequisites
-- **Tana Plus Account (or Pro):** You only need **Tana Plus** to access Tana's remote API and cloud-hosted MCP endpoint (`https://app.tana.inc/mcp`). Tana Pro is not required. Generate a Personal Access Token in **Settings → API Tokens**.
-- **Hosting Account:** A free Cloudflare account (for serverless edge) or any Docker-compatible hosting environment.
+## Prerequisites & Free-Tier Reality Check
+- **Tana Plus Account (or Pro):** You only need **Tana Plus** to access Tana's remote API and cloud-hosted MCP endpoint (`https://app.tana.inc/mcp`). Tana's free Core tier does not support API token generation.
+- **Hosting Account:** A free Cloudflare account ($0/mo) covers 24/7 serverless edge compute, Vectorize vector search, and D1 SQLite storage (supports up to 10,000 nodes and ~13,000 queries/month on the free tier).
+- **AI Client:** Creating Custom GPT Actions requires ChatGPT Plus/Team ($20/mo). Free-tier users who do not have ChatGPT Plus can connect the engine directly to **Claude Desktop** (which supports MCP 100% free with no subscription) or open-source clients like **Cursor**, **LibreChat**, or **OpenWebUI**.
 
 ---
 
