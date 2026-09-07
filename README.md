@@ -152,7 +152,7 @@ Add the server endpoint to your MCP configuration:
 ---
 
 ## Prerequisites
-- **Tana Pro Account:** Required for Tana's hosted cloud MCP endpoint (`https://app.tana.inc/mcp`). Generate a Personal Access Token in **Settings → API Tokens**.
+- **Tana Plus Account (or Pro):** You only need **Tana Plus** to access Tana's remote API and cloud-hosted MCP endpoint (`https://app.tana.inc/mcp`). Tana Pro is not required. Generate a Personal Access Token in **Settings → API Tokens**.
 - **Hosting Account:** A free Cloudflare account (for serverless edge) or any Docker-compatible hosting environment.
 
 ---
