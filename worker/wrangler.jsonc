@@ -1,9 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "tana-context-mask",
-  "main": "src/index.ts",
+  "main": "src/secure.ts",
   "compatibility_date": "2025-02-24",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
 
   // D1 Database Binding for Graph + FTS5 metadata
   "d1_databases": [
