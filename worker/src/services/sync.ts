@@ -262,6 +262,22 @@ export class EdgeSyncService {
       await this.db.batch(chunk);
     }
 
+    // HARD GUARDRAIL: Strict circuit breaker preventing runaway credit consumption
+    const MAX_INCREMENTAL_EMBEDDINGS = 50;
+    const DAILY_SAFETY_CAP = 500;
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyMeta = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'daily_embeddings_usage'").first<any>();
+    let [savedDay, countStr] = (dailyMeta?.value || `${today}:0`).split(':');
+    let dailyCount = savedDay === today ? parseInt(countStr || '0', 10) : 0;
+
+    if (dailyCount >= DAILY_SAFETY_CAP) {
+      console.warn(`[Guardrail] Daily embedding budget (${DAILY_SAFETY_CAP}) reached for ${today} (${dailyCount} used). Clamping background embeddings to 0.`);
+      nodesToEmbed.length = 0;
+    } else if (nodesToEmbed.length > MAX_INCREMENTAL_EMBEDDINGS) {
+      console.warn(`[Guardrail] Runaway batch embedding prevention: ${nodesToEmbed.length} nodes queued. Clamping to ${MAX_INCREMENTAL_EMBEDDINGS} to protect credits.`);
+      nodesToEmbed.length = MAX_INCREMENTAL_EMBEDDINGS;
+    }
+
     // 5. Batch Workers AI embeddings in chunks of 25 texts per call (ONLY for changed/new nodes)
     const vectorsToUpsert: any[] = [];
     const AI_EMBED_CHUNK_SIZE = 25;
@@ -326,6 +342,12 @@ export class EdgeSyncService {
       } catch {
         // Ignore if vectors not in index
       }
+    }
+
+    // Record daily vector usage in D1 to enforce budget across runs
+    if (vectorsToUpsert.length > 0) {
+      dailyCount += vectorsToUpsert.length;
+      await this.db.prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('daily_embeddings_usage', ?, ?)").bind(`${today}:${dailyCount}`, new Date().toISOString()).run();
     }
 
     return { ingestedCount: activeNodeCount, vectorsCount: vectorsToUpsert.length };
@@ -582,6 +604,10 @@ export class EdgeSyncService {
       truncation_detected: truncationRes?.value === 'true',
       indexing_lag_seconds: lagRes?.value ? parseInt(lagRes.value, 10) : 0,
       backfill_complete: backfillCompRes?.value === 'true',
+      daily_embeddings_usage: (await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'daily_embeddings_usage'").first<any>())?.value || `${new Date().toISOString().slice(0, 10)}:0`,
+      daily_safety_cap: 500,
+      max_batch_safety_cap: 50,
+      guardrail_status: 'enforced',
       timestamp: new Date().toISOString()
     };
   }
