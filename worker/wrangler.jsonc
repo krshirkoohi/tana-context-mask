@@ -29,10 +29,9 @@
 
   "workers_dev": true,
 
-  // Automated background crons are disabled to prevent credit consumption.
-  // Synchronization is performed on-demand via authenticated POST /api/v1/sync.
+  // Automated background incremental sync with SHA-256 hash diffing
   "triggers": {
-    "crons": []
+    "crons": ["*/15 * * * *"]
   },
 
   "vars": {
