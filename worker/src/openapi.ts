@@ -11,6 +11,10 @@ export const openApiSpec = {
       "description": "Cloudflare Serverless Production"
     }
   ],
+  "security": [
+    { "ApiKeyAuth": [] },
+    { "BearerAuth": [] }
+  ],
   "paths": {
     "/": {
       "get": {
@@ -200,6 +204,19 @@ export const openApiSpec = {
     }
   },
   "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "API key passed via x-api-key header"
+      },
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Bearer token authentication using your secret API key"
+      }
+    },
     "schemas": {
       "ContextAcquisitionRequest": {
         "type": "object",

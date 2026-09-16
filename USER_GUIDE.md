@@ -55,13 +55,16 @@ cd tana-context-mask
 
 ---
 
-### Step 2: Workspace Data Ingestion
+### Step 2: Workspace Data Ingestion & Credit Protection
 
-Once deployed, your Cloudflare Worker synchronises your Tana notes automatically in the background:
-* **Continuous Edge Sync:** A background cron trigger runs automatically every 15 minutes (`*/15 * * * *`). It pulls newly created or edited nodes from Tana, computes vector embeddings, and stores them in your database.
-* **Check Sync Health:** Visit `https://<your-subdomain>.workers.dev/api/v1/sync/status` in any browser to see your live node count and indexing status.
-
-*You can now close your terminal and shut down your computer. Your engine runs 24/7 in the cloud.*
+To protect your Cloudflare Workers AI free-tier allowances and prevent unnecessary background credit drain, automatic 15-minute cron triggers are **disabled by default**:
+* **On-Demand Incremental Sync:** Trigger a delta sync anytime by making an authenticated request:
+  ```bash
+  curl -X POST "https://<your-subdomain>.workers.dev/api/v1/sync?lookback_days=1" \
+       -H "Authorization: Bearer <your-secret-api-key>"
+  ```
+  Or invoke the `sync_mirror` MCP tool directly from your connected AI agent.
+* **Check Sync Health:** Visit `https://<your-subdomain>.workers.dev/api/v1/sync/status` (with your API key header) or call the `get_system_status` tool to see your live node count and indexing status.
 
 ---
 
@@ -77,10 +80,14 @@ Once deployed, your Cloudflare Worker synchronises your Tana notes automatically
    ```text
    https://<your-subdomain>.workers.dev/openapi.json
    ```
-5. Leave **Authentication** set to **None** (your worker authenticates directly with Tana using your encrypted secret).
+5. Configure **Authentication**:
+   * Change **Authentication** from *None* to **API Key**.
+   * Under **Auth Type**, select **Bearer**.
+   * Paste your **Secret API Key** (printed during `./deploy.sh` or set via `wrangler secret put API_KEY`).
+   * *This ensures only your authenticated ChatGPT assistant can access your private Tana notes. All unauthenticated requests are strictly rejected with `401 Unauthorized`.*
 6. Click **Save** in the top right.
 
-**Done!** Your Custom GPT is now fully connected to your Tana workspace on Web, iOS, iPadOS, and Android.
+**Done!** Your Custom GPT is now securely connected to your Tana workspace on Web, iOS, iPadOS, and Android.
 
 ---
 

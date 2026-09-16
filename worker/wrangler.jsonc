@@ -27,9 +27,12 @@
     "binding": "AI"
   },
 
-  // Automated 15-minute background sync cron
+  "workers_dev": true,
+
+  // Automated background crons are disabled to prevent credit consumption.
+  // Synchronization is performed on-demand via authenticated POST /api/v1/sync.
   "triggers": {
-    "crons": ["*/15 * * * *"]
+    "crons": []
   },
 
   "vars": {

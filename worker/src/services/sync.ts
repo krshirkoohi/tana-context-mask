@@ -11,6 +11,13 @@ export interface SyncResult {
   lastConsumedTimestamp: string;
 }
 
+async function calculateContentHash(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  const arr = Array.from(new Uint8Array(digest));
+  return arr.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export class EdgeSyncService {
   constructor(
     private db: D1Database,
@@ -92,8 +99,8 @@ export class EdgeSyncService {
 
   /**
    * Helper to batch embed and upsert into D1 + Vectorize on the Edge.
-   * Chunks D1 statements to stay safely within D1 100-statement limits.
-   * Batches Workers AI embedding calls and Vectorize upserts.
+   * Performs SHA-256 content-hash diffing to guarantee Workers AI and Vectorize
+   * are ONLY called for truly new or edited content, completely preventing credit drain.
    */
   private async ingestNodes(rawNodes: any[]): Promise<{ ingestedCount: number; vectorsCount: number }> {
     const statements: any[] = [];
@@ -101,16 +108,23 @@ export class EdgeSyncService {
     const nodesToEmbed: Array<{ id: string; name: string; desc: string }> = [];
     let activeNodeCount = 0;
 
+    // 1. Separate trashed nodes from active candidate nodes and compute content hashes
+    const candidateNodes: Array<{
+      id: string;
+      name: string;
+      desc: string;
+      docType: string | null;
+      parentId: string | null;
+      createdAt: string | null;
+      textToEmbed: string;
+      contentHash: string;
+      tags: any[];
+      children: any[];
+    }> = [];
+
     for (const node of rawNodes) {
       const id = node.id || node.nodeId;
       if (!id) continue;
-
-      const name = (node.name || '').replace(/<[^>]+>/g, '').trim();
-      const desc = (node.description || '').trim();
-      const docType = node.docType || null;
-      const parentId = node.parentId || null;
-      const createdAt = node.created || null;
-      const now = new Date().toISOString();
 
       // If node was trashed or deleted in Tana, remove from D1 & Vectorize
       if (node.inTrash === true) {
@@ -125,72 +139,130 @@ export class EdgeSyncService {
         continue;
       }
 
+      const name = (node.name || '').replace(/<[^>]+>/g, '').trim();
+      const desc = (node.description || '').trim();
       if (!name && !desc) continue;
+
+      const textToEmbed = `${name}\n${desc}`.trim();
+      const contentHash = await calculateContentHash(textToEmbed);
+
+      candidateNodes.push({
+        id,
+        name,
+        desc,
+        docType: node.docType || null,
+        parentId: node.parentId || null,
+        createdAt: node.created || null,
+        textToEmbed,
+        contentHash,
+        tags: Array.isArray(node.tags) ? node.tags : (Array.isArray(node.supertags) ? node.supertags : []),
+        children: Array.isArray(node.children) ? node.children : []
+      });
+    }
+
+    // 2. Query existing content hashes and hierarchy from D1 in batches of 50 to detect real changes
+    const existingMap = new Map<string, { contentHash: string | null; parentId: string | null }>();
+    const candidateIds = candidateNodes.map(n => n.id);
+
+    for (let i = 0; i < candidateIds.length; i += 50) {
+      const chunkIds = candidateIds.slice(i, i + 50);
+      const placeholders = chunkIds.map(() => '?').join(',');
+      const query = `SELECT id, content_hash, parent_id FROM nodes WHERE id IN (${placeholders})`;
+      try {
+        const { results } = await this.db.prepare(query).bind(...chunkIds).all<any>();
+        if (results) {
+          for (const row of results) {
+            existingMap.set(row.id, {
+              contentHash: row.content_hash || null,
+              parentId: row.parent_id || null
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[Sync] Could not batch fetch existing content hashes:', err);
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    // 3. Process candidate nodes - skip embedding and writes if completely unchanged
+    for (const item of candidateNodes) {
+      const existing = existingMap.get(item.id);
+      const contentUnchanged = !!existing && existing.contentHash === item.contentHash;
+      const parentUnchanged = !!existing && existing.parentId === item.parentId;
+
+      // If both content and hierarchy are unchanged, skip D1 upsert and Workers AI completely
+      if (contentUnchanged && parentUnchanged) {
+        continue;
+      }
+
       activeNodeCount++;
 
       statements.push(
         this.db.prepare(`
-          INSERT INTO nodes (id, name, description, doc_type, parent_id, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO nodes (id, name, description, doc_type, parent_id, created_at, updated_at, content_hash)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
             doc_type = COALESCE(excluded.doc_type, nodes.doc_type),
             parent_id = COALESCE(excluded.parent_id, nodes.parent_id),
             created_at = COALESCE(excluded.created_at, nodes.created_at),
-            updated_at = excluded.updated_at
-        `).bind(id, name, desc, docType, parentId, createdAt, now)
+            updated_at = excluded.updated_at,
+            content_hash = excluded.content_hash
+        `).bind(item.id, item.name, item.desc, item.docType, item.parentId, item.createdAt, now, item.contentHash)
       );
 
-      statements.push(
-        this.db.prepare(`DELETE FROM node_fts WHERE id = ?`).bind(id),
-        this.db.prepare(`INSERT INTO node_fts (id, name, description) VALUES (?, ?, ?)`).bind(id, name, desc)
-      );
+      // Only update FTS if content changed or node is new
+      if (!contentUnchanged) {
+        statements.push(
+          this.db.prepare(`DELETE FROM node_fts WHERE id = ?`).bind(item.id),
+          this.db.prepare(`INSERT INTO node_fts (id, name, description) VALUES (?, ?, ?)`).bind(item.id, item.name, item.desc)
+        );
+      }
 
       // Handle tags if present
-      const tagsList = Array.isArray(node.tags) ? node.tags : (Array.isArray(node.supertags) ? node.supertags : []);
-      if (tagsList.length > 0) {
-        statements.push(this.db.prepare(`DELETE FROM tags WHERE node_id = ?`).bind(id));
-        for (const st of tagsList) {
+      if (item.tags.length > 0) {
+        statements.push(this.db.prepare(`DELETE FROM tags WHERE node_id = ?`).bind(item.id));
+        for (const st of item.tags) {
           const tagId = typeof st === 'string' ? st : (st.id || st.name);
           const tagName = typeof st === 'string' ? st : (st.name || st.id);
           if (tagId && tagName) {
             statements.push(
-              this.db.prepare(`INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)`).bind(id, tagId, tagName)
+              this.db.prepare(`INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)`).bind(item.id, tagId, tagName)
             );
           }
         }
       }
 
-      // Handle child edges if present (e.g. from get_children or day nodes)
-      if (Array.isArray(node.children) && node.children.length > 0) {
-        for (const childId of node.children) {
+      // Handle child edges if present
+      if (item.children.length > 0) {
+        for (const childId of item.children) {
           if (typeof childId === 'string' && childId) {
             statements.push(
               this.db.prepare(`
                 INSERT OR REPLACE INTO edges (source_id, target_id, relation_type, attribute_id)
                 VALUES (?, ?, 'parent_child', '')
-              `).bind(id, childId)
+              `).bind(item.id, childId)
             );
           }
         }
       }
 
-      // Queue text for batch Workers AI embedding
-      const textToEmbed = `${name}\n${desc}`.trim();
-      if (textToEmbed.length > 0) {
-        nodesToEmbed.push({ id, name, desc: textToEmbed });
+      // CRITICAL FOR CREDITS: ONLY queue for Workers AI embedding if the text content is new or actually changed!
+      if (!contentUnchanged && item.textToEmbed.length > 0) {
+        nodesToEmbed.push({ id: item.id, name: item.name, desc: item.textToEmbed });
       }
     }
 
-    // 1. Execute D1 statements in safe chunks of 60 statements (D1 limit is 100)
+    // 4. Execute D1 statements in safe chunks of 60 statements (D1 limit is 100)
     const D1_BATCH_SIZE = 60;
     for (let i = 0; i < statements.length; i += D1_BATCH_SIZE) {
       const chunk = statements.slice(i, i + D1_BATCH_SIZE);
       await this.db.batch(chunk);
     }
 
-    // 2. Batch Workers AI embeddings in chunks of 25 texts per call
+    // 5. Batch Workers AI embeddings in chunks of 25 texts per call (ONLY for changed/new nodes)
     const vectorsToUpsert: any[] = [];
     const AI_EMBED_CHUNK_SIZE = 25;
 
@@ -236,7 +308,7 @@ export class EdgeSyncService {
       }
     }
 
-    // 3. Upsert to Vectorize in chunks of 50
+    // 6. Upsert to Vectorize in chunks of 50
     const VECTORIZE_CHUNK_SIZE = 50;
     for (let i = 0; i < vectorsToUpsert.length; i += VECTORIZE_CHUNK_SIZE) {
       const vChunk = vectorsToUpsert.slice(i, i + VECTORIZE_CHUNK_SIZE);
@@ -247,7 +319,7 @@ export class EdgeSyncService {
       }
     }
 
-    // 4. Delete trashed vectors
+    // 7. Delete trashed vectors
     if (vectorIdsToDelete.length > 0) {
       try {
         await this.vectorize.deleteByIds(vectorIdsToDelete);
@@ -298,10 +370,14 @@ export class EdgeSyncService {
       // 5-minute safety overlap window (300,000 ms)
       const sinceMs = lastSyncMs > 0 ? Math.max(0, lastSyncMs - (5 * 60 * 1000)) : 0;
 
-      // Facet A: Created nodes in lookback window (limit 1000)
+      // Facet A: Created nodes query (use since watermark if available to prevent re-fetching full window)
       const effectiveDays = forceBackfill ? Math.max(7, lookbackDays) : lookbackDays;
+      const createdQuery: Record<string, any> = (!forceBackfill && sinceMs > 0)
+        ? { created: { since: sinceMs } }
+        : { created: { last: effectiveDays } };
+
       const createdRes = await this.callTanaMCP('search_nodes', {
-        query: { created: { last: effectiveDays } },
+        query: createdQuery,
         limit: 1000
       });
       pagesFetched++;
@@ -357,10 +433,15 @@ export class EdgeSyncService {
       }
 
       // Facet C: Day / Calendar nodes & Direct Children Discovery
-      // Fetches recent Day nodes (tag: 1Kcq0q_pf5Fn) and hydrates their children via get_children
+      // In incremental mode, only look at recent day nodes (last 3 days) rather than 100 historical day nodes!
+      const dayQuery: Record<string, any> = forceBackfill
+        ? { hasType: '1Kcq0q_pf5Fn' }
+        : { and: [{ hasType: '1Kcq0q_pf5Fn' }, { created: { last: 3 } }] };
+      const dayLimit = forceBackfill ? 100 : 5;
+
       const dayRes = await this.callTanaMCP('search_nodes', {
-        query: { hasType: '1Kcq0q_pf5Fn' },
-        limit: 100
+        query: dayQuery,
+        limit: dayLimit
       });
       pagesFetched++;
 

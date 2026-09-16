@@ -1,20 +1,56 @@
-import { Hono } from 'hono';
+import { Hono, Context, Next } from 'hono';
 import { cors } from 'hono/cors';
+import { streamSSE } from 'hono/streaming';
 import { Env, ContextAcquisitionRequest, ContextPacket, ContextNode } from './types';
 import { D1GraphStore } from './services/graph';
 import { HybridSearchService } from './services/search';
 import { EdgeReranker } from './services/reranker';
 import { EdgeSyncService } from './services/sync';
-
 import { openApiSpec } from './openapi';
-
 import { RemoteMCPHandler } from './services/mcp';
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.use('*', cors());
 
-import { streamSSE } from 'hono/streaming';
+// Strict Mandatory Authentication Middleware
+const requireAuth = async (c: Context<{ Bindings: Env }>, next: Next) => {
+  const expectedKey = c.env.API_KEY;
+  if (!expectedKey || expectedKey.trim() === '') {
+    return c.json({
+      error: 'Unauthorized: Server API_KEY is not configured. Access is locked down to protect private workspace data.'
+    }, 500);
+  }
+
+  const authHeader = c.req.header('Authorization') || c.req.header('x-api-key');
+  let token: string | null = null;
+
+  if (authHeader) {
+    if (authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else {
+      token = authHeader.trim();
+    }
+  }
+
+  // Support query parameter for SSE EventSource / browser streaming
+  if (!token) {
+    token = c.req.query('apiKey') || c.req.query('token') || null;
+  }
+
+  if (!token || token !== expectedKey) {
+    return c.json({ error: 'Unauthorized: Valid API key or Bearer token required.' }, 401);
+  }
+
+  await next();
+};
+
+// Protect all private API and MCP endpoints with mandatory authentication
+app.use('/api/*', requireAuth);
+app.use('/sse', requireAuth);
+app.use('/mcp', requireAuth);
+app.use('/messages', requireAuth);
+app.use('/mc', requireAuth);
 
 // Model Context Protocol (MCP) SSE Transport Endpoint
 app.get('/sse', async (c) => {
@@ -144,7 +180,8 @@ app.get('/.well-known/ai-plugin.json', (c) => {
     description_for_human: 'Semantic and graph-aware context acquisition plugin for Tana Outliner.',
     description_for_model: 'Proactively discovers, expands, and reranks relevant background context from Tana Outliner knowledge graph before answering user questions about notes, tasks, meetings, people, and projects.',
     auth: {
-      type: 'none'
+      type: 'service_http',
+      authorization_type: 'bearer'
     },
     api: {
       type: 'openapi',
@@ -180,20 +217,8 @@ app.get('/logo.png', (c) => {
   </svg>`);
 });
 
-// Authentication Middleware
-app.use('/api/*', async (c, next) => {
-  const apiKey = c.env.API_KEY;
-  if (apiKey) {
-    const headerKey = c.req.header('x-api-key') || c.req.header('Authorization')?.replace('Bearer ', '');
-    if (headerKey !== apiKey) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
-  }
-  await next();
-});
-
-// Root: Supports both GET overview and POST MCP JSON-RPC
-app.post('/', async (c) => {
+// Root: Supports both GET overview and authenticated POST MCP JSON-RPC
+app.post('/', requireAuth, async (c) => {
   try {
     const body = await c.req.json();
     if (body && body.jsonrpc === '2.0') {
@@ -202,7 +227,7 @@ app.post('/', async (c) => {
       return c.json(res);
     }
   } catch {
-    // Ignore and return root
+    // Ignore and return error
   }
   return c.json({ error: 'Invalid JSON-RPC payload' }, 400);
 });

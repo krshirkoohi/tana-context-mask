@@ -49,7 +49,14 @@ if [ -z "${TANA_API_TOKEN:-}" ]; then
 fi
 echo "${TANA_API_TOKEN}" | npx wrangler secret put TANA_API_TOKEN
 
-echo "--> 6. Deploying to Cloudflare Global Edge..."
+echo "--> 6. Configuring Mandatory Security API Key..."
+if [ -z "${API_KEY:-}" ]; then
+    API_KEY=$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)
+    echo "Generated secure API Key for your instance."
+fi
+echo "${API_KEY}" | npx wrangler secret put API_KEY
+
+echo "--> 7. Deploying to Cloudflare Global Edge..."
 DEPLOY_OUTPUT=$(npx wrangler deploy)
 echo "${DEPLOY_OUTPUT}"
 
@@ -57,11 +64,17 @@ WORKER_URL=$(echo "${DEPLOY_OUTPUT}" | grep -Eo 'https://[a-zA-Z0-9.-]+\.workers
 
 echo ""
 echo "========================================================"
-echo "🎉 DEPLOYMENT COMPLETE! YOUR ENGINE IS LIVE 24/7 ONLINE"
+echo "🎉 DEPLOYMENT COMPLETE! YOUR ENGINE IS LIVE & SECURE"
 echo "========================================================"
 echo "Live Worker URL:     ${WORKER_URL}"
+echo "Secret API Key:      ${API_KEY}"
 echo "OpenAPI Action Spec: ${WORKER_URL}/openapi.json"
 echo "AI Plugin Manifest:  ${WORKER_URL}/.well-known/ai-plugin.json"
 echo "Remote MCP Stream:   ${WORKER_URL}/sse"
-echo "Health & Status:     ${WORKER_URL}/api/v1/health"
+echo ""
+echo "🔐 ChatGPT Custom GPT Setup Instructions:"
+echo "1. In ChatGPT Actions, import: ${WORKER_URL}/openapi.json"
+echo "2. Set Authentication to: 'API Key'"
+echo "3. Set Auth Type to: 'Bearer'"
+echo "4. Paste your Secret API Key: ${API_KEY}"
 echo "========================================================"

@@ -159,7 +159,7 @@ Deployable to Google Cloud Run, AWS ECS, Fly.io, or standard Kubernetes clusters
    ```text
    https://<your-worker-subdomain>.workers.dev/openapi.json
    ```
-4. Set **Authentication** to `None` (or `API Key` / Bearer token if configured).
+4. Set **Authentication** to **API Key**, choose **Bearer**, and paste your private `API_KEY` secret.
 5. In **Instructions**, add:
    ```text
    Always invoke the acquireContext action before answering questions regarding projects, notes, meetings, or background context to ground answers with direct Tana links.

@@ -7,6 +7,9 @@ info:
 servers:
 - url: YOUR_HTTPS_TUNNEL_URL
   description: Tana Context Mask HTTPS Tunnel Endpoint
+security:
+- ApiKeyAuth: []
+- BearerAuth: []
 paths:
   /:
     get:
@@ -293,6 +296,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: API key passed via x-api-key header
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token authentication using your secret API key
   schemas:
     ContextAcquisitionRequest:
       properties:

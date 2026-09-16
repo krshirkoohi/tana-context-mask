@@ -37,9 +37,19 @@ graph_engine = GraphEngine(db)
 context_builder = ContextBuilder(db, vector_store, search_engine, graph_engine)
 mirror_engine = MirrorEngine(db, vector_store)
 
-def verify_api_key(x_api_key: Optional[str] = Header(None)):
-    if settings.api_key and x_api_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
+def verify_api_key(
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None)
+):
+    if not settings.api_key:
+        return True
+    token = None
+    if authorization:
+        token = authorization[7:].strip() if authorization.startswith("Bearer ") else authorization.strip()
+    elif x_api_key:
+        token = x_api_key.strip()
+    if token != settings.api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
     return True
 
 @app.get("/", summary="Root Health & Overview")
