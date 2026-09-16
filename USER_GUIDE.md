@@ -55,21 +55,29 @@ cd tana-context-mask
 
 ---
 
-### Step 2: Workspace Data Ingestion & Credit Protection
+### Step 2: Intelligent Data Sync & Credit Protection
 
-To protect your Cloudflare Workers AI free-tier allowances and prevent unnecessary background credit drain, automatic 15-minute cron triggers are **disabled by default**:
-* **On-Demand Incremental Sync:** Trigger a delta sync anytime by making an authenticated request:
+The engine features an automated background cron (`*/15 * * * *`) that synchronises newly edited notes every 15 minutes:
+* **SHA-256 Content-Hash Diffing:** The sync computes SHA-256 hashes for all touched nodes and checks your SQLite D1 database. Unchanged text is completely skipped—resulting in **0 calls to Workers AI and 0 Vectorize writes**.
+* **Dual Hard Circuit Breakers:**
+  * **Per-Run Batch Clamp (500 nodes):** Prevents burst ingestion spikes.
+  * **Daily Safety Cap (10,000 nodes/day):** Hard circuit breaker protecting your Cloudflare free tier budget.
+* **On-Demand Manual Sync:** Trigger an immediate sync anytime:
   ```bash
   curl -X POST "https://<your-subdomain>.workers.dev/api/v1/sync?lookback_days=1" \
        -H "Authorization: Bearer <your-secret-api-key>"
   ```
-  Or invoke the `sync_mirror` MCP tool directly from your connected AI agent.
-* **Check Sync Health:** Visit `https://<your-subdomain>.workers.dev/api/v1/sync/status` (with your API key header) or call the `get_system_status` tool to see your live node count and indexing status.
+* **Check Live Health & Quota:**
+  ```bash
+  curl -H "Authorization: Bearer <your-secret-api-key>" \
+       "https://<your-subdomain>.workers.dev/api/v1/sync/status"
+  ```
 
 ---
 
-### Step 3: Configure Your Custom GPT in ChatGPT (3 Minutes)
+### Step 3: Connect Your AI Assistant
 
+#### Option A: ChatGPT Custom GPT (Web, iOS, Android, macOS)
 1. Open [chatgpt.com/gpts/editor](https://chatgpt.com/gpts/editor) (or click **Explore GPTs → Create**).
 2. Go to the **Configure** tab:
    * **Name:** `Tana Knowledge Assistant`
@@ -83,11 +91,31 @@ To protect your Cloudflare Workers AI free-tier allowances and prevent unnecessa
 5. Configure **Authentication**:
    * Change **Authentication** from *None* to **API Key**.
    * Under **Auth Type**, select **Bearer**.
-   * Paste your **Secret API Key** (printed during `./deploy.sh` or set via `wrangler secret put API_KEY`).
-   * *This ensures only your authenticated ChatGPT assistant can access your private Tana notes. All unauthenticated requests are strictly rejected with `401 Unauthorized`.*
-6. Click **Save** in the top right.
+   * Paste your **Secret API Key** (printed during `./deploy.sh` or set via `npx wrangler secret put API_KEY`).
+6. In **Privacy Policy**, enter: `https://<your-subdomain>.workers.dev`.
+7. Click **Save** in the top right.
 
-**Done!** Your Custom GPT is now securely connected to your Tana workspace on Web, iOS, iPadOS, and Android.
+#### Option B: Claude Desktop, Cursor & MCP Clients
+Add the server to your `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "tana-context": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://<your-subdomain>.workers.dev/sse?apiKey=<YOUR_SECRET_API_KEY>"
+      ]
+    }
+  }
+}
+```
+
+> [!CAUTION]
+> **API Key Security Reminder:** Never commit your API key or paste it into public configuration files. Store it securely in your password manager (e.g. Bitwarden) and inject it solely via `wrangler secret put API_KEY` or environment variables.
+
+---
 
 ---
 

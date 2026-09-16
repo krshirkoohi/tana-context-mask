@@ -72,8 +72,8 @@ Built to interface cleanly with major AI ecosystems:
 
 | Standard | Compatible Clients | Integration Method |
 | :--- | :--- | :--- |
-| **OpenAPI 3.1 Actions** | ChatGPT (Web & Mobile), LibreChat, OpenWebUI | Import `/openapi.json` |
-| **Model Context Protocol (MCP)** | Claude Desktop, Cursor, Windsurf, Cline, Antigravity | Connect to `/sse` |
+| **OpenAPI 3.0.1 Actions** | ChatGPT (Web, macOS, iOS, Android), LibreChat, OpenWebUI | Import `/openapi.json` |
+| **Model Context Protocol (MCP)** | Claude Desktop, Cursor, Windsurf, Cline, Antigravity | Connect to `/sse?apiKey=<KEY>` |
 | **REST API** | LangChain, LlamaIndex, AutoGen, Custom Agents | Standard `POST /api/v1/context/acquire` |
 
 ---
@@ -181,6 +181,64 @@ Add the server endpoint to your MCP configuration:
   }
 }
 ```
+
+---
+
+## Security & Authentication Guide
+
+The Tana Semantic Engine is hardened with a mandatory zero-trust security model to ensure private workspace data is never publicly exposed. All private endpoints (`/api/*`, `/sse`, `/mcp`, `/messages`, `/mc`) reject unauthenticated requests with `401 Unauthorized`.
+
+### 1. Generating & Provisioning Your API Key
+When deploying via `./deploy.sh`, a cryptographically secure 16-byte hex key is automatically generated and stored directly into Cloudflare's encrypted secrets store.
+
+To generate and provision your key manually:
+```bash
+# Generate a 32-character secure random key
+openssl rand -hex 16
+
+# Store securely in Cloudflare (never written to disk or git)
+cd worker
+npx wrangler secret put API_KEY
+```
+
+> [!IMPORTANT]
+> **Zero-Leakage Policy:** NEVER commit or hardcode your API key to any file in your Git repository. The engine is architected to read credentials exclusively from Cloudflare Worker runtime secrets (`c.env.API_KEY`). Always keep your `.env` or local files in `.gitignore`.
+
+---
+
+### 2. Connecting Your AI Clients
+
+#### A. ChatGPT Custom GPT Actions
+1. In ChatGPT, open your GPT editor (**Explore GPTs → Create / Edit → Configure**).
+2. Under **Actions**, click **Create new action**.
+3. Under **Schema**, click **Import from URL** and paste:
+   ```text
+   https://<your-subdomain>.workers.dev/openapi.json
+   ```
+4. Configure **Authentication**:
+   * **Authentication Type:** Select **API Key**.
+   * **Auth Type:** Select **Bearer**.
+   * **API Key:** Paste your generated secret API key.
+5. In **Privacy Policy**, enter your worker root URL (`https://<your-subdomain>.workers.dev`).
+6. Click **Save**.
+
+#### B. Claude Desktop, Cursor & MCP Clients
+Configure your client’s MCP settings file (e.g. `claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "tana-context": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://<your-subdomain>.workers.dev/sse?apiKey=<YOUR_SECRET_API_KEY>"
+      ]
+    }
+  }
+}
+```
+*Alternatively, if your client supports custom HTTP headers, pass `Authorization: Bearer <YOUR_SECRET_API_KEY>` or `x-api-key: <YOUR_SECRET_API_KEY>`.*
 
 ---
 
