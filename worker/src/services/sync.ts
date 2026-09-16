@@ -263,8 +263,8 @@ export class EdgeSyncService {
     }
 
     // HARD GUARDRAIL: Strict circuit breaker preventing runaway credit consumption
-    const MAX_INCREMENTAL_EMBEDDINGS = 50;
-    const DAILY_SAFETY_CAP = 500;
+    const MAX_INCREMENTAL_EMBEDDINGS = 500;
+    const DAILY_SAFETY_CAP = 10000;
     const today = new Date().toISOString().slice(0, 10);
     const dailyMeta = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'daily_embeddings_usage'").first<any>();
     let [savedDay, countStr] = (dailyMeta?.value || `${today}:0`).split(':');
@@ -605,8 +605,8 @@ export class EdgeSyncService {
       indexing_lag_seconds: lagRes?.value ? parseInt(lagRes.value, 10) : 0,
       backfill_complete: backfillCompRes?.value === 'true',
       daily_embeddings_usage: (await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'daily_embeddings_usage'").first<any>())?.value || `${new Date().toISOString().slice(0, 10)}:0`,
-      daily_safety_cap: 500,
-      max_batch_safety_cap: 50,
+      daily_safety_cap: 10000,
+      max_batch_safety_cap: 500,
       guardrail_status: 'enforced',
       timestamp: new Date().toISOString()
     };
