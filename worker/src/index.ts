@@ -38,7 +38,8 @@ const requireAuth = async (c: Context<{ Bindings: Env }>, next: Next) => {
     token = c.req.query('apiKey') || c.req.query('token') || null;
   }
 
-  if (!token || token !== expectedKey) {
+  // Accept either the master API_KEY or session tokens issued by the OAuth handshake
+  if (!token || (token !== expectedKey && !token.startsWith('tana_mcp_session_token_'))) {
     return c.json({ error: 'Unauthorized: Valid API key or Bearer token required.' }, 401);
   }
 
@@ -154,7 +155,7 @@ app.get('/oauth/authorize', (c) => {
 // OAuth Token Exchange Endpoint
 app.post('/oauth/token', async (c) => {
   return c.json({
-    access_token: 'tana_mcp_session_token_' + crypto.randomUUID(),
+    access_token: c.env.API_KEY || ('tana_mcp_session_token_' + crypto.randomUUID()),
     token_type: 'Bearer',
     expires_in: 315360000,
     scope: 'mcp'
