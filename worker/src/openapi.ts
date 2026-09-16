@@ -1,5 +1,5 @@
 export const openApiSpec = {
-  "openapi": "3.1.0",
+  "openapi": "3.0.1",
   "info": {
     "title": "Tana Context Mask Plugin",
     "description": "An embedding-backed, graph-aware semantic context acquisition plugin for Tana Outliner with calendar-first temporal retrieval.",
@@ -7,7 +7,7 @@ export const openApiSpec = {
   },
   "servers": [
     {
-      "url": "https://<your-worker-subdomain>.workers.dev",
+      "url": "https://tana-context-mask.krshirkoohi.workers.dev",
       "description": "Cloudflare Serverless Production"
     }
   ],

@@ -1,12 +1,12 @@
-openapi: 3.1.0
+openapi: 3.0.1
 info:
   title: Tana Context Mask API
   description: An embedding-backed, graph-aware semantic context acquisition layer
     for Tana Outliner and ChatGPT Actions.
   version: 1.0.0
 servers:
-- url: YOUR_HTTPS_TUNNEL_URL
-  description: Tana Context Mask HTTPS Tunnel Endpoint
+- url: https://tana-context-mask.krshirkoohi.workers.dev
+  description: Cloudflare Serverless Production
 security:
 - ApiKeyAuth: []
 - BearerAuth: []
