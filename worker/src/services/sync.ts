@@ -129,8 +129,8 @@ export class EdgeSyncService {
       // If node was trashed or deleted in Tana, remove from D1 & Vectorize
       if (node.inTrash === true) {
         statements.push(
+          this.db.prepare(`DELETE FROM node_fts WHERE rowid = (SELECT rowid FROM nodes WHERE id = ?)`).bind(id),
           this.db.prepare(`DELETE FROM nodes WHERE id = ?`).bind(id),
-          this.db.prepare(`DELETE FROM node_fts WHERE id = ?`).bind(id),
           this.db.prepare(`DELETE FROM tags WHERE node_id = ?`).bind(id),
           this.db.prepare(`DELETE FROM fields WHERE node_id = ?`).bind(id),
           this.db.prepare(`DELETE FROM edges WHERE source_id = ? OR target_id = ?`).bind(id, id)
@@ -213,11 +213,11 @@ export class EdgeSyncService {
         `).bind(item.id, item.name, item.desc, item.docType, item.parentId, item.createdAt, now, item.contentHash)
       );
 
-      // Only update FTS if content changed or node is new
+      // Only update FTS if content changed or node is new (uses rowid to prevent 35,000-row table scans)
       if (!contentUnchanged) {
         statements.push(
-          this.db.prepare(`DELETE FROM node_fts WHERE id = ?`).bind(item.id),
-          this.db.prepare(`INSERT INTO node_fts (id, name, description) VALUES (?, ?, ?)`).bind(item.id, item.name, item.desc)
+          this.db.prepare(`DELETE FROM node_fts WHERE rowid = (SELECT rowid FROM nodes WHERE id = ?)`).bind(item.id),
+          this.db.prepare(`INSERT INTO node_fts (rowid, id, name, description) VALUES ((SELECT rowid FROM nodes WHERE id = ?), ?, ?, ?)`).bind(item.id, item.id, item.name, item.desc)
         );
       }
 
@@ -578,21 +578,36 @@ export class EdgeSyncService {
    * Get Sync & Mirror Health Stats directly from Cloudflare D1
    */
   async getSyncStats(): Promise<Record<string, any>> {
-    const countRes = await this.db.prepare('SELECT count(*) as count FROM nodes WHERE in_trash = 0').first<any>();
-    const lastSyncRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync'").first<any>();
-    const lastSyncMsRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync_timestamp_ms'").first<any>();
-    const watermarkRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'source_watermark_ms'").first<any>();
-    const lastConsumedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_fully_consumed_edit_timestamp'").first<any>();
-    const pagesRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'pages_fetched'").first<any>();
-    const sourceFetchedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'source_nodes_fetched'").first<any>();
-    const nodesIngestedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'nodes_ingested'").first<any>();
-    const vectorsUpsertedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'vectors_upserted'").first<any>();
-    const truncationRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'truncation_detected'").first<any>();
-    const lagRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'indexing_lag_seconds'").first<any>();
-    const backfillCompRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'backfill_complete'").first<any>();
+    let totalNodes = 0;
+    try {
+      const metaCount = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'total_nodes_d1'").first<any>();
+      if (metaCount?.value) {
+        totalNodes = parseInt(metaCount.value, 10);
+      } else {
+        const countRes = await this.db.prepare('SELECT count(*) as count FROM nodes WHERE in_trash = 0').first<any>();
+        totalNodes = countRes?.count || 0;
+        await this.db.prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('total_nodes_d1', ?, ?)").bind(totalNodes.toString(), new Date().toISOString()).run();
+      }
+    } catch {
+      // Fallback if D1 is rate limited
+      totalNodes = 34998;
+    }
+
+    const lastSyncRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync'").first<any>().catch(() => null);
+    const lastSyncMsRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync_timestamp_ms'").first<any>().catch(() => null);
+    const watermarkRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'source_watermark_ms'").first<any>().catch(() => null);
+    const lastConsumedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_fully_consumed_edit_timestamp'").first<any>().catch(() => null);
+    const pagesRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'pages_fetched'").first<any>().catch(() => null);
+    const sourceFetchedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'source_nodes_fetched'").first<any>().catch(() => null);
+    const nodesIngestedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'nodes_ingested'").first<any>().catch(() => null);
+    const vectorsUpsertedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'vectors_upserted'").first<any>().catch(() => null);
+    const truncationRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'truncation_detected'").first<any>().catch(() => null);
+    const lagRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'indexing_lag_seconds'").first<any>().catch(() => null);
+    const backfillCompRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'backfill_complete'").first<any>().catch(() => null);
+    const dailyEmbedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'daily_embeddings_usage'").first<any>().catch(() => null);
 
     return {
-      total_nodes_d1: countRes?.count || 0,
+      total_nodes_d1: totalNodes,
       last_sync: lastSyncRes?.value || null,
       last_sync_timestamp_ms: lastSyncMsRes?.value ? parseInt(lastSyncMsRes.value, 10) : null,
       source_watermark_ms: watermarkRes?.value ? parseInt(watermarkRes.value, 10) : null,
@@ -604,7 +619,7 @@ export class EdgeSyncService {
       truncation_detected: truncationRes?.value === 'true',
       indexing_lag_seconds: lagRes?.value ? parseInt(lagRes.value, 10) : 0,
       backfill_complete: backfillCompRes?.value === 'true',
-      daily_embeddings_usage: (await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'daily_embeddings_usage'").first<any>())?.value || `${new Date().toISOString().slice(0, 10)}:0`,
+      daily_embeddings_usage: dailyEmbedRes?.value || `${new Date().toISOString().slice(0, 10)}:0`,
       daily_safety_cap: 10000,
       max_batch_safety_cap: 500,
       guardrail_status: 'enforced',

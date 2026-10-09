@@ -140,10 +140,9 @@ export class HybridSearchService {
 
         const { results } = await this.db
           .prepare(`
-            SELECT f.id, bm25(node_fts) as rank_score
-            FROM node_fts f
-            JOIN nodes n ON f.id = n.id
-            WHERE node_fts MATCH ? AND n.in_trash = 0
+            SELECT id, bm25(node_fts) as rank_score
+            FROM node_fts
+            WHERE node_fts MATCH ?
             ORDER BY rank_score ASC
             LIMIT ?
           `)
