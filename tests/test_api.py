@@ -1,11 +1,19 @@
 import pytest
 from fastapi.testclient import TestClient
 from tana_context_mask.api.server import app
+from tana_context_mask.config import settings
 from tana_context_mask.storage.db import SQLiteStore
 from tana_context_mask.storage.vector_store import VectorStore
 from tana_context_mask.models.node import TanaNode, NodeTag
 
 client = TestClient(app)
+
+
+def _auth_headers() -> dict:
+    if settings.api_key:
+        return {"X-API-Key": settings.api_key}
+    return {}
+
 
 @pytest.fixture(autouse=True)
 def seed_test_data():
@@ -34,7 +42,7 @@ def test_acquire_context_endpoint():
         "task": "Test task for FastAPI",
         "max_nodes": 3
     }
-    resp = client.post("/api/v1/context/acquire", json=payload)
+    resp = client.post("/api/v1/context/acquire", json=payload, headers=_auth_headers())
     assert resp.status_code == 200
     data = resp.json()
     assert "trace_id" in data
@@ -46,14 +54,14 @@ def test_search_endpoint():
         "query": "FastAPI Test",
         "limit": 5
     }
-    resp = client.post("/api/v1/search", json=payload)
+    resp = client.post("/api/v1/search", json=payload, headers=_auth_headers())
     assert resp.status_code == 200
     data = resp.json()
     assert data["total_hits"] >= 1
     assert any(r["id"] == "api_test_node" for r in data["results"])
 
 def test_node_details_endpoint():
-    resp = client.get("/api/v1/nodes/api_test_node")
+    resp = client.get("/api/v1/nodes/api_test_node", headers=_auth_headers())
     assert resp.status_code == 200
     data = resp.json()
     assert data["node"]["id"] == "api_test_node"

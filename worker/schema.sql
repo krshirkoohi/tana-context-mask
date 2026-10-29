@@ -27,6 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_trash ON nodes(in_trash);
 CREATE INDEX IF NOT EXISTS idx_nodes_updated ON nodes(updated_at);
 CREATE INDEX IF NOT EXISTS idx_nodes_effective_date ON nodes(effective_date);
+CREATE INDEX IF NOT EXISTS idx_nodes_trash_effective_date ON nodes(in_trash, effective_date);
 CREATE INDEX IF NOT EXISTS idx_nodes_ancestor_day ON nodes(ancestor_day_node_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_ancestor_year ON nodes(ancestor_year_node_id);
 

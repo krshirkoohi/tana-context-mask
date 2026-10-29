@@ -2,6 +2,8 @@ import { D1Database, VectorizeIndex, Ai } from '@cloudflare/workers-types';
 
 export interface SyncResult {
   updatedCount: number;
+  skippedCount?: number;
+  d1StatementsExecuted?: number;
   status: string;
   sourceNodesFetched: number;
   vectorsUpserted: number;
@@ -102,13 +104,23 @@ export class EdgeSyncService {
    * Performs SHA-256 content-hash diffing to guarantee Workers AI and Vectorize
    * are ONLY called for truly new or edited content, completely preventing credit drain.
    */
-  private async ingestNodes(rawNodes: any[]): Promise<{ ingestedCount: number; vectorsCount: number }> {
+  private async ingestNodes(rawNodes: any[]): Promise<{
+    ingestedCount: number;
+    skippedCount: number;
+    newNodesCount: number;
+    trashedCount: number;
+    d1StatementsExecuted: number;
+    vectorsCount: number;
+  }> {
     const statements: any[] = [];
     const vectorIdsToDelete: string[] = [];
     const nodesToEmbed: Array<{ id: string; name: string; desc: string }> = [];
     let activeNodeCount = 0;
+    let skippedCount = 0;
+    let newNodesCount = 0;
+    let trashedCount = 0;
 
-    // 1. Separate trashed nodes from active candidate nodes and compute content hashes
+    // 1. Separate trashed nodes from active candidate nodes and compute content + structure hashes
     const candidateNodes: Array<{
       id: string;
       name: string;
@@ -118,6 +130,7 @@ export class EdgeSyncService {
       createdAt: string | null;
       textToEmbed: string;
       contentHash: string;
+      structureHash: string;
       tags: any[];
       children: any[];
     }> = [];
@@ -128,6 +141,7 @@ export class EdgeSyncService {
 
       // If node was trashed or deleted in Tana, remove from D1 & Vectorize
       if (node.inTrash === true) {
+        trashedCount++;
         statements.push(
           this.db.prepare(`DELETE FROM node_fts WHERE rowid = (SELECT rowid FROM nodes WHERE id = ?)`).bind(id),
           this.db.prepare(`DELETE FROM nodes WHERE id = ?`).bind(id),
@@ -145,6 +159,14 @@ export class EdgeSyncService {
 
       const textToEmbed = `${name}\n${desc}`.trim();
       const contentHash = await calculateContentHash(textToEmbed);
+      const rawTags = Array.isArray(node.tags) ? node.tags : (Array.isArray(node.supertags) ? node.supertags : []);
+      const rawChildren = Array.isArray(node.children) ? node.children : [];
+      const tagSignature = rawTags
+        .map((st: any) => (typeof st === 'string' ? st : `${st.id || ''}:${st.name || ''}`))
+        .sort()
+        .join('|');
+      const childSignature = rawChildren.filter((c: any) => typeof c === 'string').sort().join('|');
+      const structureHash = await calculateContentHash(`${node.parentId || ''}|${node.docType || ''}|${tagSignature}|${childSignature}`);
 
       candidateNodes.push({
         id,
@@ -155,25 +177,27 @@ export class EdgeSyncService {
         createdAt: node.created || null,
         textToEmbed,
         contentHash,
-        tags: Array.isArray(node.tags) ? node.tags : (Array.isArray(node.supertags) ? node.supertags : []),
-        children: Array.isArray(node.children) ? node.children : []
+        structureHash,
+        tags: rawTags,
+        children: rawChildren
       });
     }
 
-    // 2. Query existing content hashes and hierarchy from D1 in batches of 50 to detect real changes
-    const existingMap = new Map<string, { contentHash: string | null; parentId: string | null }>();
+    // 2. Query existing content/structure hashes and hierarchy from D1 in batches of 50 to detect real changes
+    const existingMap = new Map<string, { contentHash: string | null; structureHash: string | null; parentId: string | null }>();
     const candidateIds = candidateNodes.map(n => n.id);
 
     for (let i = 0; i < candidateIds.length; i += 50) {
       const chunkIds = candidateIds.slice(i, i + 50);
       const placeholders = chunkIds.map(() => '?').join(',');
-      const query = `SELECT id, content_hash, parent_id FROM nodes WHERE id IN (${placeholders})`;
+      const query = `SELECT id, content_hash, structure_hash, parent_id FROM nodes WHERE id IN (${placeholders})`;
       try {
         const { results } = await this.db.prepare(query).bind(...chunkIds).all<any>();
         if (results) {
           for (const row of results) {
             existingMap.set(row.id, {
               contentHash: row.content_hash || null,
+              structureHash: row.structure_hash || null,
               parentId: row.parent_id || null
             });
           }
@@ -185,23 +209,29 @@ export class EdgeSyncService {
 
     const now = new Date().toISOString();
 
-    // 3. Process candidate nodes - skip embedding and writes if completely unchanged
+    // 3. Process candidate nodes - skip embedding and D1 writes if completely unchanged
     for (const item of candidateNodes) {
       const existing = existingMap.get(item.id);
+      const isNewNode = !existing;
       const contentUnchanged = !!existing && existing.contentHash === item.contentHash;
       const parentUnchanged = !!existing && existing.parentId === item.parentId;
+      const structureUnchanged = !!existing && existing.structureHash === item.structureHash && parentUnchanged;
 
-      // If both content and hierarchy are unchanged, skip D1 upsert and Workers AI completely
-      if (contentUnchanged && parentUnchanged) {
+      // If both content and structure/hierarchy are unchanged, skip D1 upsert and Workers AI completely
+      if (contentUnchanged && structureUnchanged) {
+        skippedCount++;
         continue;
       }
 
+      if (isNewNode) {
+        newNodesCount++;
+      }
       activeNodeCount++;
 
       statements.push(
         this.db.prepare(`
-          INSERT INTO nodes (id, name, description, doc_type, parent_id, created_at, updated_at, content_hash)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO nodes (id, name, description, doc_type, parent_id, created_at, updated_at, content_hash, structure_hash)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
@@ -209,8 +239,9 @@ export class EdgeSyncService {
             parent_id = COALESCE(excluded.parent_id, nodes.parent_id),
             created_at = COALESCE(excluded.created_at, nodes.created_at),
             updated_at = excluded.updated_at,
-            content_hash = excluded.content_hash
-        `).bind(item.id, item.name, item.desc, item.docType, item.parentId, item.createdAt, now, item.contentHash)
+            content_hash = excluded.content_hash,
+            structure_hash = excluded.structure_hash
+        `).bind(item.id, item.name, item.desc, item.docType, item.parentId, item.createdAt, now, item.contentHash, item.structureHash)
       );
 
       // Only update FTS if content changed or node is new (uses rowid to prevent 35,000-row table scans)
@@ -221,30 +252,31 @@ export class EdgeSyncService {
         );
       }
 
-      // Handle tags if present
-      if (item.tags.length > 0) {
-        statements.push(this.db.prepare(`DELETE FROM tags WHERE node_id = ?`).bind(item.id));
-        for (const st of item.tags) {
-          const tagId = typeof st === 'string' ? st : (st.id || st.name);
-          const tagName = typeof st === 'string' ? st : (st.name || st.id);
-          if (tagId && tagName) {
-            statements.push(
-              this.db.prepare(`INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)`).bind(item.id, tagId, tagName)
-            );
+      // Only rewrite tags and child edges if structure changed or node is new
+      if (!structureUnchanged) {
+        if (item.tags.length > 0) {
+          statements.push(this.db.prepare(`DELETE FROM tags WHERE node_id = ?`).bind(item.id));
+          for (const st of item.tags) {
+            const tagId = typeof st === 'string' ? st : (st.id || st.name);
+            const tagName = typeof st === 'string' ? st : (st.name || st.id);
+            if (tagId && tagName) {
+              statements.push(
+                this.db.prepare(`INSERT OR REPLACE INTO tags (node_id, tag_id, tag_name) VALUES (?, ?, ?)`).bind(item.id, tagId, tagName)
+              );
+            }
           }
         }
-      }
 
-      // Handle child edges if present
-      if (item.children.length > 0) {
-        for (const childId of item.children) {
-          if (typeof childId === 'string' && childId) {
-            statements.push(
-              this.db.prepare(`
-                INSERT OR REPLACE INTO edges (source_id, target_id, relation_type, attribute_id)
-                VALUES (?, ?, 'parent_child', '')
-              `).bind(item.id, childId)
-            );
+        if (item.children.length > 0) {
+          for (const childId of item.children) {
+            if (typeof childId === 'string' && childId) {
+              statements.push(
+                this.db.prepare(`
+                  INSERT OR REPLACE INTO edges (source_id, target_id, relation_type, attribute_id)
+                  VALUES (?, ?, 'parent_child', '')
+                `).bind(item.id, childId)
+              );
+            }
           }
         }
       }
@@ -350,7 +382,14 @@ export class EdgeSyncService {
       await this.db.prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('daily_embeddings_usage', ?, ?)").bind(`${today}:${dailyCount}`, new Date().toISOString()).run();
     }
 
-    return { ingestedCount: activeNodeCount, vectorsCount: vectorsToUpsert.length };
+    return {
+      ingestedCount: activeNodeCount,
+      skippedCount,
+      newNodesCount,
+      trashedCount,
+      d1StatementsExecuted: statements.length,
+      vectorsCount: vectorsToUpsert.length
+    };
   }
 
   /**
@@ -526,31 +565,49 @@ export class EdgeSyncService {
       }
 
       // Ingest all collected nodes
-      const { ingestedCount, vectorsCount } = await this.ingestNodes(allCollectedNodes);
+      const {
+        ingestedCount,
+        skippedCount,
+        newNodesCount,
+        trashedCount,
+        d1StatementsExecuted,
+        vectorsCount
+      } = await this.ingestNodes(allCollectedNodes);
 
       // Advance watermark: use maximum verified node timestamp or nowMs if all consumed
       const newWatermarkMs = maxSourceTimestampMs > 0 ? Math.max(maxSourceTimestampMs, nowMs) : nowMs;
       const lastConsumedIso = new Date(newWatermarkMs).toISOString();
+      const nowIso = new Date().toISOString();
+
+      // Incrementally maintain total_nodes_d1 in sync_metadata without full-table COUNT(*) scans
+      const totalMetaRow = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'total_nodes_d1'").first<any>().catch(() => null);
+      const currentTotal = totalMetaRow?.value ? parseInt(totalMetaRow.value, 10) : 34998;
+      const updatedTotal = Math.max(0, currentTotal + newNodesCount - trashedCount);
 
       // Record comprehensive sync metadata in D1
       const metaStatements = [
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_sync', ?, ?)`).bind(new Date().toISOString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_sync_timestamp_ms', ?, ?)`).bind(newWatermarkMs.toString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('source_watermark_ms', ?, ?)`).bind(newWatermarkMs.toString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_fully_consumed_edit_timestamp', ?, ?)`).bind(lastConsumedIso, new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('pages_fetched', ?, ?)`).bind(pagesFetched.toString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('source_nodes_fetched', ?, ?)`).bind(totalFetched.toString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('nodes_ingested', ?, ?)`).bind(ingestedCount.toString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('vectors_upserted', ?, ?)`).bind(vectorsCount.toString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('truncation_detected', ?, ?)`).bind(truncationDetected ? 'true' : 'false', new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('indexing_lag_seconds', ?, ?)`).bind(Math.max(0, Math.round((nowMs - newWatermarkMs) / 1000)).toString(), new Date().toISOString()),
-        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('backfill_complete', 'true', ?)`).bind(new Date().toISOString())
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('total_nodes_d1', ?, ?)`).bind(updatedTotal.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_sync', ?, ?)`).bind(nowIso, nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_sync_timestamp_ms', ?, ?)`).bind(newWatermarkMs.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('source_watermark_ms', ?, ?)`).bind(newWatermarkMs.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_fully_consumed_edit_timestamp', ?, ?)`).bind(lastConsumedIso, nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('pages_fetched', ?, ?)`).bind(pagesFetched.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('source_nodes_fetched', ?, ?)`).bind(totalFetched.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('nodes_ingested', ?, ?)`).bind(ingestedCount.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('nodes_skipped_unchanged', ?, ?)`).bind(skippedCount.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('d1_statements_executed', ?, ?)`).bind(d1StatementsExecuted.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('vectors_upserted', ?, ?)`).bind(vectorsCount.toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('truncation_detected', ?, ?)`).bind(truncationDetected ? 'true' : 'false', nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('indexing_lag_seconds', ?, ?)`).bind(Math.max(0, Math.round((nowMs - newWatermarkMs) / 1000)).toString(), nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('backfill_complete', 'true', ?)`).bind(nowIso)
       ];
 
       await this.db.batch(metaStatements);
 
       return {
         updatedCount: ingestedCount,
+        skippedCount,
+        d1StatementsExecuted,
         status: 'success',
         sourceNodesFetched: totalFetched,
         vectorsUpserted: vectorsCount,
@@ -575,51 +632,51 @@ export class EdgeSyncService {
   }
 
   /**
-   * Get Sync & Mirror Health Stats directly from Cloudflare D1
+   * Get Sync & Mirror Health Stats directly from Cloudflare D1 in a single batched metadata query
    */
   async getSyncStats(): Promise<Record<string, any>> {
-    let totalNodes = 0;
+    const meta = new Map<string, string>();
     try {
-      const metaCount = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'total_nodes_d1'").first<any>();
-      if (metaCount?.value) {
-        totalNodes = parseInt(metaCount.value, 10);
-      } else {
-        const countRes = await this.db.prepare('SELECT count(*) as count FROM nodes WHERE in_trash = 0').first<any>();
-        totalNodes = countRes?.count || 0;
-        await this.db.prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('total_nodes_d1', ?, ?)").bind(totalNodes.toString(), new Date().toISOString()).run();
+      const { results } = await this.db
+        .prepare('SELECT key, value FROM sync_metadata')
+        .all<{ key: string; value: string }>();
+      for (const row of results || []) {
+        meta.set(row.key, row.value);
       }
     } catch {
       // Fallback if D1 is rate limited
-      totalNodes = 34998;
     }
 
-    const lastSyncRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync'").first<any>().catch(() => null);
-    const lastSyncMsRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_sync_timestamp_ms'").first<any>().catch(() => null);
-    const watermarkRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'source_watermark_ms'").first<any>().catch(() => null);
-    const lastConsumedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'last_fully_consumed_edit_timestamp'").first<any>().catch(() => null);
-    const pagesRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'pages_fetched'").first<any>().catch(() => null);
-    const sourceFetchedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'source_nodes_fetched'").first<any>().catch(() => null);
-    const nodesIngestedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'nodes_ingested'").first<any>().catch(() => null);
-    const vectorsUpsertedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'vectors_upserted'").first<any>().catch(() => null);
-    const truncationRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'truncation_detected'").first<any>().catch(() => null);
-    const lagRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'indexing_lag_seconds'").first<any>().catch(() => null);
-    const backfillCompRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'backfill_complete'").first<any>().catch(() => null);
-    const dailyEmbedRes = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'daily_embeddings_usage'").first<any>().catch(() => null);
+    let totalNodes = meta.has('total_nodes_d1') ? parseInt(meta.get('total_nodes_d1')!, 10) : 0;
+    if (!totalNodes) {
+      try {
+        const countRes = await this.db.prepare('SELECT count(*) as count FROM nodes WHERE in_trash = 0').first<any>();
+        totalNodes = countRes?.count || 34998;
+        await this.db
+          .prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('total_nodes_d1', ?, ?)")
+          .bind(totalNodes.toString(), new Date().toISOString())
+          .run();
+      } catch {
+        totalNodes = 34998;
+      }
+    }
 
     return {
       total_nodes_d1: totalNodes,
-      last_sync: lastSyncRes?.value || null,
-      last_sync_timestamp_ms: lastSyncMsRes?.value ? parseInt(lastSyncMsRes.value, 10) : null,
-      source_watermark_ms: watermarkRes?.value ? parseInt(watermarkRes.value, 10) : null,
-      last_fully_consumed_edit_timestamp: lastConsumedRes?.value || null,
-      pages_fetched: pagesRes?.value ? parseInt(pagesRes.value, 10) : 0,
-      source_nodes_fetched: sourceFetchedRes?.value ? parseInt(sourceFetchedRes.value, 10) : 0,
-      nodes_ingested: nodesIngestedRes?.value ? parseInt(nodesIngestedRes.value, 10) : 0,
-      vectors_upserted: vectorsUpsertedRes?.value ? parseInt(vectorsUpsertedRes.value, 10) : 0,
-      truncation_detected: truncationRes?.value === 'true',
-      indexing_lag_seconds: lagRes?.value ? parseInt(lagRes.value, 10) : 0,
-      backfill_complete: backfillCompRes?.value === 'true',
-      daily_embeddings_usage: dailyEmbedRes?.value || `${new Date().toISOString().slice(0, 10)}:0`,
+      last_sync: meta.get('last_sync') || null,
+      last_sync_timestamp_ms: meta.has('last_sync_timestamp_ms') ? parseInt(meta.get('last_sync_timestamp_ms')!, 10) : null,
+      source_watermark_ms: meta.has('source_watermark_ms') ? parseInt(meta.get('source_watermark_ms')!, 10) : null,
+      last_fully_consumed_edit_timestamp: meta.get('last_fully_consumed_edit_timestamp') || null,
+      pages_fetched: meta.has('pages_fetched') ? parseInt(meta.get('pages_fetched')!, 10) : 0,
+      source_nodes_fetched: meta.has('source_nodes_fetched') ? parseInt(meta.get('source_nodes_fetched')!, 10) : 0,
+      nodes_ingested: meta.has('nodes_ingested') ? parseInt(meta.get('nodes_ingested')!, 10) : 0,
+      nodes_skipped_unchanged: meta.has('nodes_skipped_unchanged') ? parseInt(meta.get('nodes_skipped_unchanged')!, 10) : 0,
+      d1_statements_executed: meta.has('d1_statements_executed') ? parseInt(meta.get('d1_statements_executed')!, 10) : 0,
+      vectors_upserted: meta.has('vectors_upserted') ? parseInt(meta.get('vectors_upserted')!, 10) : 0,
+      truncation_detected: meta.get('truncation_detected') === 'true',
+      indexing_lag_seconds: meta.has('indexing_lag_seconds') ? parseInt(meta.get('indexing_lag_seconds')!, 10) : 0,
+      backfill_complete: meta.get('backfill_complete') === 'true',
+      daily_embeddings_usage: meta.get('daily_embeddings_usage') || `${new Date().toISOString().slice(0, 10)}:0`,
       daily_safety_cap: 10000,
       max_batch_safety_cap: 500,
       guardrail_status: 'enforced',
