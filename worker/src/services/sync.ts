@@ -29,7 +29,8 @@ export class EdgeSyncService {
   ) {}
 
   /**
-   * Helper to call Tana Remote MCP JSON-RPC 2.0 tool endpoint with retry & backoff.
+   * Helper to call Tana Remote MCP JSON-RPC 2.0 tool endpoint with bounded retry,
+   * exponential backoff + jitter, and terminal vs retryable error separation (#21).
    */
   private async callTanaMCP(toolName: string, args: Record<string, any>, maxRetries: number = 3): Promise<any> {
     if (!this.tanaToken) return null;
@@ -58,9 +59,16 @@ export class EdgeSyncService {
           body: JSON.stringify(payload)
         });
 
+        if (res.status === 401 || res.status === 403) {
+          const authErr: any = new Error(`Terminal Tana MCP authorisation failure (HTTP ${res.status}): re-authorisation required`);
+          authErr.isTerminalAuth = true;
+          throw authErr;
+        }
+
         if (res.status === 429 || (res.status >= 500 && res.status <= 504)) {
           if (attempt < maxRetries) {
-            const backoffMs = Math.min(4000, 500 * Math.pow(2, attempt));
+            const jitterMs = Math.floor(Math.random() * 250);
+            const backoffMs = Math.min(4000, 500 * Math.pow(2, attempt)) + jitterMs;
             await new Promise(resolve => setTimeout(resolve, backoffMs));
             continue;
           }
@@ -89,14 +97,44 @@ export class EdgeSyncService {
 
         return jsonRpcRes.result;
       } catch (err: any) {
-        if (attempt >= maxRetries) {
+        if (err?.isTerminalAuth || attempt >= maxRetries) {
           throw err;
         }
-        const backoffMs = Math.min(3000, 400 * Math.pow(2, attempt));
+        const jitterMs = Math.floor(Math.random() * 200);
+        const backoffMs = Math.min(3000, 400 * Math.pow(2, attempt)) + jitterMs;
         await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
     }
     return null;
+  }
+
+  private async acquireSyncLock(lockOwner: string, ttlMs: number = 300000): Promise<boolean> {
+    const nowMs = Date.now();
+    try {
+      const existingRow = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'sync_lock'").first<any>();
+      if (existingRow?.value) {
+        try {
+          const parsed = JSON.parse(existingRow.value);
+          if (parsed.expiresAt > nowMs && parsed.owner !== lockOwner) {
+            return false;
+          }
+        } catch {}
+      }
+      const lockPayload = JSON.stringify({ owner: lockOwner, acquiredAt: nowMs, expiresAt: nowMs + ttlMs });
+      await this.db
+        .prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('sync_lock', ?, ?)")
+        .bind(lockPayload, new Date(nowMs).toISOString())
+        .run();
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  private async releaseSyncLock(lockOwner: string): Promise<void> {
+    try {
+      await this.db.prepare("DELETE FROM sync_metadata WHERE key = 'sync_lock'").run();
+    } catch {}
   }
 
   /**
@@ -415,6 +453,21 @@ export class EdgeSyncService {
       };
     }
 
+    const lockOwner = `edge-sync-${crypto.randomUUID()}`;
+    const lockAcquired = await this.acquireSyncLock(lockOwner);
+    if (!lockAcquired) {
+      return {
+        updatedCount: 0,
+        status: 'skipped_concurrent_lock',
+        sourceNodesFetched: 0,
+        vectorsUpserted: 0,
+        pagesFetched: 0,
+        truncationDetected: false,
+        watermarkMs: 0,
+        lastConsumedTimestamp: new Date().toISOString()
+      };
+    }
+
     try {
       const nowMs = Date.now();
       let pagesFetched = 0;
@@ -602,7 +655,12 @@ export class EdgeSyncService {
         this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('backfill_complete', 'true', ?)`).bind(nowIso)
       ];
 
-      await this.db.batch(metaStatements);
+      await this.db.batch([
+        ...metaStatements,
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('auth_status', 'ok', ?)`).bind(nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_successful_sync', ?, ?)`).bind(nowIso, nowIso),
+        this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_sync_error', '', ?)`).bind(nowIso)
+      ]);
 
       return {
         updatedCount: ingestedCount,
@@ -618,17 +676,127 @@ export class EdgeSyncService {
       };
     } catch (err: any) {
       console.error('Tana MCP delta sync error:', err);
+      const nowIso = new Date().toISOString();
+      try {
+        await this.db.batch([
+          this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('auth_status', ?, ?)`).bind(err?.isTerminalAuth ? 'reauth_required' : 'ok', nowIso),
+          this.db.prepare(`INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_sync_error', ?, ?)`).bind(err?.message || 'sync_error', nowIso)
+        ]);
+      } catch {}
       return {
         updatedCount: 0,
-        status: `error: ${err.message}`,
+        status: err?.isTerminalAuth ? `error_reauth_required: ${err.message}` : `error: ${err.message}`,
         sourceNodesFetched: 0,
         vectorsUpserted: 0,
         pagesFetched: 0,
         truncationDetected: false,
         watermarkMs: 0,
-        lastConsumedTimestamp: new Date().toISOString()
+        lastConsumedTimestamp: nowIso
       };
+    } finally {
+      await this.releaseSyncLock(lockOwner);
     }
+  }
+
+  /**
+   * Periodic bounded reconciliation pass (#20) to remove deleted, trashed, or out-of-scope nodes
+   * from D1 and Vectorize while preserving valid descendants and never deleting on transient failure.
+   */
+  async reconcileStaleNodes(batchLimit: number = 50, candidateIds?: string[]): Promise<Record<string, any>> {
+    const nowIso = new Date().toISOString();
+    let offset = 0;
+    try {
+      const offRow = await this.db.prepare("SELECT value FROM sync_metadata WHERE key = 'reconcile_cursor_offset'").first<any>();
+      offset = offRow?.value ? parseInt(offRow.value, 10) : 0;
+    } catch {}
+
+    let rows: Array<{ id: string; parent_id: string | null; in_trash: number }> = [];
+    if (candidateIds && candidateIds.length > 0) {
+      const placeholders = candidateIds.map(() => '?').join(',');
+      const res = await this.db
+        .prepare(`SELECT id, parent_id, in_trash FROM nodes WHERE id IN (${placeholders})`)
+        .bind(...candidateIds)
+        .all<any>();
+      rows = res.results || [];
+    } else {
+      const res = await this.db
+        .prepare('SELECT id, parent_id, in_trash FROM nodes ORDER BY id ASC LIMIT ? OFFSET ?')
+        .bind(batchLimit, offset)
+        .all<any>();
+      rows = res.results || [];
+      if (rows.length === 0 && offset > 0) {
+        offset = 0;
+        const retryRes = await this.db
+          .prepare('SELECT id, parent_id, in_trash FROM nodes ORDER BY id ASC LIMIT ? OFFSET 0')
+          .bind(batchLimit)
+          .all<any>();
+        rows = retryRes.results || [];
+      }
+      offset += rows.length;
+    }
+
+    const staleIds: string[] = [];
+    let transientFailures = 0;
+
+    for (const r of rows) {
+      if (r.in_trash === 1 || r.id.startsWith('SYS_') || (r.parent_id && r.parent_id.endsWith('_TRASH'))) {
+        staleIds.push(r.id);
+        continue;
+      }
+      if (!this.tanaToken) continue;
+      try {
+        const remote = await this.callTanaMCP('read_node', { nodeId: r.id, maxDepth: 0 }, 2);
+        if (remote && typeof remote === 'object') {
+          if (remote.deleted === true || remote.inTrash === true || remote.notFound === true || String(remote.parentId || '').endsWith('_TRASH')) {
+            staleIds.push(r.id);
+          }
+        } else if (typeof remote === 'string') {
+          const lower = remote.trim().toLowerCase();
+          if (lower === 'not_found' || lower === 'node not found' || lower === 'deleted') {
+            staleIds.push(r.id);
+          }
+        }
+      } catch {
+        // Transient or auth error: preserve node safely
+        transientFailures++;
+      }
+    }
+
+    if (staleIds.length > 0) {
+      const stmts: any[] = [];
+      for (const nid of staleIds) {
+        stmts.push(
+          this.db.prepare('UPDATE nodes SET parent_id = NULL WHERE parent_id = ?').bind(nid),
+          this.db.prepare('DELETE FROM node_fts WHERE rowid = (SELECT rowid FROM nodes WHERE id = ?)').bind(nid),
+          this.db.prepare('DELETE FROM tags WHERE node_id = ?').bind(nid),
+          this.db.prepare('DELETE FROM fields WHERE node_id = ?').bind(nid),
+          this.db.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').bind(nid, nid),
+          this.db.prepare('DELETE FROM nodes WHERE id = ?').bind(nid)
+        );
+      }
+      for (let i = 0; i < stmts.length; i += 60) {
+        await this.db.batch(stmts.slice(i, i + 60));
+      }
+      try {
+        await this.vectorize.deleteByIds(staleIds);
+      } catch {}
+    }
+
+    await this.db.batch([
+      this.db.prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('reconcile_cursor_offset', ?, ?)").bind(offset.toString(), nowIso),
+      this.db.prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('last_reconciliation', ?, ?)").bind(nowIso, nowIso),
+      this.db.prepare("INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('reconciled_removed_count', ?, ?)").bind(staleIds.length.toString(), nowIso)
+    ]);
+
+    return {
+      status: 'success',
+      checked_count: rows.length,
+      removed_count: staleIds.length,
+      removed_node_ids: staleIds,
+      transient_failures: transientFailures,
+      next_cursor_offset: offset,
+      timestamp: nowIso
+    };
   }
 
   /**
@@ -661,9 +829,15 @@ export class EdgeSyncService {
       }
     }
 
+    const authStatus = meta.get('auth_status') || (this.tanaToken ? 'ok' : 'missing_token');
     return {
       total_nodes_d1: totalNodes,
       last_sync: meta.get('last_sync') || null,
+      last_successful_sync: meta.get('last_successful_sync') || meta.get('last_sync') || null,
+      last_reconciliation: meta.get('last_reconciliation') || null,
+      auth_status: authStatus,
+      reauth_required: authStatus === 'reauth_required',
+      last_sync_error: meta.get('last_sync_error') || null,
       last_sync_timestamp_ms: meta.has('last_sync_timestamp_ms') ? parseInt(meta.get('last_sync_timestamp_ms')!, 10) : null,
       source_watermark_ms: meta.has('source_watermark_ms') ? parseInt(meta.get('source_watermark_ms')!, 10) : null,
       last_fully_consumed_edit_timestamp: meta.get('last_fully_consumed_edit_timestamp') || null,

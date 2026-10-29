@@ -2,7 +2,8 @@ import sqlite3
 import json
 import hashlib
 import re
-from typing import List, Dict, Optional, Tuple, Any
+from contextlib import contextmanager
+from typing import List, Dict, Optional, Tuple, Any, Iterator
 from pathlib import Path
 from datetime import datetime
 from ..config import settings
@@ -15,13 +16,18 @@ class SQLiteStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.init_db()
 
-    def get_connection(self) -> sqlite3.Connection:
+    @contextmanager
+    def get_connection(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def init_db(self):
         with self.get_connection() as conn:
@@ -523,6 +529,80 @@ class SQLiteStore:
             row = conn.execute("SELECT COUNT(*) as count FROM nodes WHERE in_trash = 0").fetchone()
             return row["count"] if row else 0
 
+    def delete_nodes(self, node_ids: List[str]) -> int:
+        """
+        Safely remove deleted, trashed, or out-of-scope nodes from SQLite tables
+        while preserving valid surviving descendants (detaching their parent_id if needed).
+        """
+        clean_ids = [nid for nid in dict.fromkeys(node_ids) if nid]
+        if not clean_ids:
+            return 0
+
+        removed = 0
+        with self.get_connection() as conn:
+            for i in range(0, len(clean_ids), 200):
+                chunk = clean_ids[i:i + 200]
+                placeholders = ",".join(["?"] * len(chunk))
+                # Preserve surviving descendants that are NOT in the deletion set
+                conn.execute(
+                    f"UPDATE nodes SET parent_id = NULL WHERE parent_id IN ({placeholders}) AND id NOT IN ({placeholders})",
+                    [*chunk, *chunk],
+                )
+                conn.executemany("DELETE FROM node_fts WHERE id = ?", [(nid,) for nid in chunk])
+                conn.execute(f"DELETE FROM tags WHERE node_id IN ({placeholders})", chunk)
+                conn.execute(f"DELETE FROM fields WHERE node_id IN ({placeholders})", chunk)
+                conn.execute(
+                    f"DELETE FROM edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+                    [*chunk, *chunk],
+                )
+                cur = conn.execute(f"DELETE FROM nodes WHERE id IN ({placeholders})", chunk)
+                removed += max(0, cur.rowcount if cur.rowcount is not None else len(chunk))
+            conn.commit()
+        return removed
+
+    def acquire_sync_lock(self, lock_owner: str, ttl_seconds: int = 300) -> bool:
+        """
+        Atomically acquire a bounded-TTL sync lock in sync_metadata to prevent
+        concurrent sync runs from corrupting cursor state (#21).
+        """
+        now_ts = datetime.now().timestamp()
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT value FROM sync_metadata WHERE key = 'sync_lock'").fetchone()
+            if row and row["value"]:
+                try:
+                    existing = json.loads(row["value"])
+                    expires_at = float(existing.get("expires_at", 0))
+                    owner = existing.get("owner")
+                    if expires_at > now_ts and owner != lock_owner:
+                        return False
+                except Exception:
+                    pass
+            payload = json.dumps({
+                "owner": lock_owner,
+                "acquired_at": now_ts,
+                "expires_at": now_ts + ttl_seconds,
+            })
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('sync_lock', ?, ?)",
+                (payload, datetime.now().isoformat()),
+            )
+            conn.commit()
+            return True
+
+    def release_sync_lock(self, lock_owner: Optional[str] = None):
+        with self.get_connection() as conn:
+            if lock_owner:
+                row = conn.execute("SELECT value FROM sync_metadata WHERE key = 'sync_lock'").fetchone()
+                if row and row["value"]:
+                    try:
+                        existing = json.loads(row["value"])
+                        if existing.get("owner") and existing.get("owner") != lock_owner:
+                            return
+                    except Exception:
+                        pass
+            conn.execute("DELETE FROM sync_metadata WHERE key = 'sync_lock'")
+            conn.commit()
+
     def save_trace(self, trace: TraceRecord):
         with self.get_connection() as conn:
             data_json = json.dumps({
@@ -555,6 +635,31 @@ class SQLiteStore:
                 "created_at": row["created_at"],
                 **data
             }
+
+    def list_traces(self, limit: int = 25) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM retrieval_traces ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            out = []
+            for row in rows:
+                try:
+                    data = json.loads(row["data_json"] or "{}")
+                except Exception:
+                    data = {}
+                out.append({
+                    "trace_id": row["trace_id"],
+                    "task": row["task"],
+                    "inferred_query": row["inferred_query"],
+                    "latency_ms": row["latency_ms"],
+                    "created_at": row["created_at"],
+                    "seed_count": len(data.get("seed_nodes", [])),
+                    "expanded_count": len(data.get("expanded_nodes", [])),
+                    "reranked_count": len(data.get("reranked_nodes", [])),
+                    "excluded_count": len(data.get("excluded_nodes", [])),
+                })
+            return out
 
     def get_sync_meta(self, key: str) -> Optional[str]:
         with self.get_connection() as conn:

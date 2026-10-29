@@ -45,6 +45,17 @@ def main():
     sync_parser.add_argument("--max-nodes", "-n", type=int, default=None, help="Limit number of nodes to import")
     sync_parser.add_argument("--lookback", type=int, default=1, help="Days to look back for incremental sync")
 
+    # Command: reconcile
+    rec_parser = subparsers.add_parser("reconcile", help="Run deletion and stale-node reconciliation pass")
+    rec_parser.add_argument("--limit", "-l", type=int, default=100, help="Number of nodes to verify in this pass")
+
+    # Command: daemon
+    daemon_parser = subparsers.add_parser("daemon", help="Run CPU-idle mass background indexer daemon")
+    daemon_parser.add_argument("--file", "-f", type=str, default=None, help="Optional Tana JSON export file")
+    daemon_parser.add_argument("--batch-size", "-b", type=int, default=200, help="Batch size per cycle")
+    daemon_parser.add_argument("--cpu-threshold", type=float, default=70.0, help="Max CPU load percentage before throttling")
+    daemon_parser.add_argument("--max-batches", type=int, default=None, help="Optional cap on batches to run")
+
     # Command: stats
     subparsers.add_parser("stats", help="Show current mirror and vector database statistics")
 
@@ -93,6 +104,21 @@ def main():
             print(f"Starting Incremental Sync (lookback: {args.lookback} days)...")
             res = mirror_engine.sync_incremental(lookback_days=args.lookback)
             print("Incremental Sync Complete:", json.dumps(res, indent=2))
+
+    elif args.command == "reconcile":
+        print(f"Starting Stale-Node Reconciliation (batch_limit={args.limit})...")
+        res = mirror_engine.reconcile_stale_nodes(batch_limit=args.limit)
+        print("Reconciliation Complete:", json.dumps(res, indent=2))
+
+    elif args.command == "daemon":
+        print(f"Starting Mass Background Indexer Daemon (batch_size={args.batch_size}, cpu_threshold={args.cpu_threshold}%)...")
+        res = mirror_engine.run_mass_background_indexer(
+            export_path=args.file,
+            batch_size=args.batch_size,
+            cpu_threshold=args.cpu_threshold,
+            max_batches=args.max_batches,
+        )
+        print("Background Indexer Complete:", json.dumps(res, indent=2))
 
     elif args.command == "search":
         req = SemanticSearchRequest(

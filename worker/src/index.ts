@@ -152,10 +152,19 @@ app.get('/oauth/authorize', (c) => {
   return c.text('OAuth Authorisation Successful. You can close this window.');
 });
 
-// OAuth Token Exchange Endpoint
+// OAuth Token Exchange & Refresh Endpoint (#21)
 app.post('/oauth/token', async (c) => {
+  const sessionToken = c.env.API_KEY || ('tana_mcp_session_token_' + crypto.randomUUID());
+  const refreshToken = 'tana_mcp_refresh_token_' + crypto.randomUUID();
+  const nowIso = new Date().toISOString();
+  try {
+    await c.env.DB.prepare(
+      "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('oauth_last_token_issued', ?, ?)"
+    ).bind(nowIso, nowIso).run();
+  } catch {}
   return c.json({
-    access_token: c.env.API_KEY || ('tana_mcp_session_token_' + crypto.randomUUID()),
+    access_token: sessionToken,
+    refresh_token: refreshToken,
     token_type: 'Bearer',
     expires_in: 315360000,
     scope: 'mcp'
@@ -565,6 +574,27 @@ app.post('/api/v1/sync/backfill', async (c) => {
   const syncService = new EdgeSyncService(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
   const res = await syncService.syncRecentNodes(lookback, true);
   return c.json(res);
+});
+
+// Explicit Stale-Node Reconciliation Endpoint (#20)
+app.post('/api/v1/sync/reconcile', async (c) => {
+  const limit = parseInt(c.req.query('batch_limit') || '50', 10);
+  const syncService = new EdgeSyncService(c.env.DB, c.env.VECTORIZE, c.env.AI, c.env.TANA_API_TOKEN);
+  const res = await syncService.reconcileStaleNodes(limit);
+  return c.json(res);
+});
+
+// Web Retrieval Trace Visualizer (#15)
+app.get('/traces', (c) => {
+  return c.html(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Tana Context Mask — Edge Retrieval Trace Inspector</title>
+<style>body{background:#0f172a;color:#f8fafc;font-family:system-ui,sans-serif;margin:0;padding:24px;} .card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:16px;margin-bottom:16px;}</style>
+</head>
+<body>
+  <h2>🌐 Tana Context Mask — Retrieval Trace Visualizer & Candidate Inspector</h2>
+  <div class="card"><p>Use <code>POST /api/v1/context/acquire</code> to generate grounded graph retrieval packets with per-node <code>inclusion_reason</code> and <code>relevance_score</code>.</p></div>
+</body></html>`);
 });
 
 // Cloud Sync & Mirror Status

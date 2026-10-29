@@ -177,6 +177,33 @@ class VectorStore:
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:limit]
 
+    def delete_vectors(self, node_ids: List[str]) -> int:
+        """Delete vectors by node IDs from both LanceDB and in-memory fallback store (#20)."""
+        clean_ids = [str(nid) for nid in dict.fromkeys(node_ids) if nid]
+        if not clean_ids:
+            return 0
+
+        removed = 0
+        try:
+            tbl = self._get_table()
+            if tbl is not None:
+                for i in range(0, len(clean_ids), 200):
+                    chunk = clean_ids[i:i + 200]
+                    id_filter = " OR ".join(f"id = '{nid}'" for nid in chunk)
+                    try:
+                        tbl.delete(id_filter)
+                        removed += len(chunk)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        for nid in clean_ids:
+            if nid in self._in_memory_vectors:
+                del self._in_memory_vectors[nid]
+                removed += 1
+        return removed
+
     def count_vectors(self) -> int:
         try:
             tbl = self._get_table()
